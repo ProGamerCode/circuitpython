@@ -34,6 +34,8 @@
 #include "py/persistentcode.h"
 #include "py/bc.h"
 
+#include "supervisor/shared/translate.h"
+
 #if MICROPY_PERSISTENT_CODE_LOAD || MICROPY_PERSISTENT_CODE_SAVE
 
 #include "py/smallint.h"
@@ -100,20 +102,35 @@ STATIC void extract_prelude(const byte **ip, const byte **ip2, bytecode_prelude_
 
 #include "py/parsenum.h"
 
+STATIC void raise_corrupt_mpy(void) {
+    mp_raise_RuntimeError(translate("Corrupt .mpy file"));
+}
+
 STATIC int read_byte(mp_reader_t *reader) {
-    return reader->readbyte(reader->data);
+    mp_uint_t b = reader->readbyte(reader->data);
+    if (b == MP_READER_EOF) {
+        raise_corrupt_mpy();
+    }
+    return b;
 }
 
 STATIC void read_bytes(mp_reader_t *reader, byte *buf, size_t len) {
     while (len-- > 0) {
-        *buf++ = reader->readbyte(reader->data);
+        mp_uint_t b =reader->readbyte(reader->data);
+        if (b == MP_READER_EOF) {
+            raise_corrupt_mpy();
+        }
+        *buf++ = b;
     }
 }
 
 STATIC size_t read_uint(mp_reader_t *reader) {
     size_t unum = 0;
     for (;;) {
-        byte b = reader->readbyte(reader->data);
+        mp_uint_t b = reader->readbyte(reader->data);
+        if (b == MP_READER_EOF) {
+            raise_corrupt_mpy();
+        }
         unum = (unum << 7) | (b & 0x7f);
         if ((b & 0x80) == 0) {
             break;
@@ -124,10 +141,9 @@ STATIC size_t read_uint(mp_reader_t *reader) {
 
 STATIC qstr load_qstr(mp_reader_t *reader) {
     size_t len = read_uint(reader);
-    char *str = m_new(char, len);
+    char str[len];
     read_bytes(reader, (byte*)str, len);
     qstr qst = qstr_from_strn(str, len);
-    m_del(char, str, len);
     return qst;
 }
 
@@ -144,11 +160,12 @@ STATIC mp_obj_t load_obj(mp_reader_t *reader) {
             return mp_obj_new_str_from_vstr(obj_type == 's' ? &mp_type_str : &mp_type_bytes, &vstr);
         } else if (obj_type == 'i') {
             return mp_parse_num_integer(vstr.buf, vstr.len, 10, NULL);
-        } else {
-            assert(obj_type == 'f' || obj_type == 'c');
+        } else if (obj_type == 'f' || obj_type == 'c') {
             return mp_parse_num_decimal(vstr.buf, vstr.len, obj_type == 'c', false, NULL);
         }
     }
+    raise_corrupt_mpy();
+    return MP_OBJ_FROM_PTR(&mp_const_none_obj);
 }
 
 STATIC void load_bytecode_qstrs(mp_reader_t *reader, byte *ip, byte *ip_top) {
@@ -200,7 +217,11 @@ STATIC mp_raw_code_t *load_raw_code(mp_reader_t *reader) {
 
     // create raw_code and return it
     mp_raw_code_t *rc = mp_emit_glue_new_raw_code();
-    mp_emit_glue_assign_bytecode(rc, bytecode, bc_len, const_table,
+    mp_emit_glue_assign_bytecode(rc, bytecode,
+        #if MICROPY_PERSISTENT_CODE_SAVE || MICROPY_DEBUG_PRINTERS
+        bc_len,
+        #endif
+        const_table,
         #if MICROPY_PERSISTENT_CODE_SAVE
         n_obj, n_raw_code,
         #endif
@@ -215,9 +236,7 @@ mp_raw_code_t *mp_raw_code_load(mp_reader_t *reader) {
         || header[1] != MPY_VERSION
         || header[2] != MPY_FEATURE_FLAGS
         || header[3] > mp_small_int_bits()) {
-        // TODO(tannewt): Restore the generic error after we move folks to 2.0.0.
-        // mp_raise_ValueError("incompatible .mpy file");
-        mp_raise_ValueError("Incompatible .mpy file. Please update all .mpy files. See http://adafru.it/mpy-update for more info.");
+        mp_raise_MpyError(translate("Incompatible .mpy file. Please update all .mpy files. See http://adafru.it/mpy-update for more info."));
     }
     mp_raw_code_t *rc = load_raw_code(reader);
     reader->close(reader->data);
@@ -320,7 +339,7 @@ STATIC void save_bytecode_qstrs(mp_print_t *print, const byte *ip, const byte *i
 
 STATIC void save_raw_code(mp_print_t *print, mp_raw_code_t *rc) {
     if (rc->kind != MP_CODE_BYTECODE) {
-        mp_raise_ValueError("can only save bytecode");
+        mp_raise_ValueError(translate("can only save bytecode"));
     }
 
     // save bytecode

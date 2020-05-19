@@ -106,7 +106,8 @@ STATIC mp_obj_t mp_sys_print_exception(size_t n_args, const mp_obj_t *args) {
     #if MICROPY_PY_IO && MICROPY_PY_SYS_STDFILES
     void *stream_obj = &mp_sys_stdout_obj;
     if (n_args > 1) {
-        stream_obj = MP_OBJ_TO_PTR(args[1]); // XXX may fail
+        mp_get_stream_raise(args[1], MP_STREAM_OP_WRITE);
+        stream_obj = MP_OBJ_TO_PTR(args[1]);
     }
 
     mp_print_t print = {stream_obj, mp_stream_write_adaptor};
@@ -134,16 +135,18 @@ STATIC mp_obj_t mp_sys_exc_info(void) {
 
     t->items[0] = MP_OBJ_FROM_PTR(mp_obj_get_type(cur_exc));
     t->items[1] = cur_exc;
-    t->items[2] = mp_const_none;
+    t->items[2] = mp_obj_exception_get_traceback_obj(cur_exc);
     return MP_OBJ_FROM_PTR(t);
 }
 MP_DEFINE_CONST_FUN_OBJ_0(mp_sys_exc_info_obj, mp_sys_exc_info);
 #endif
 
+#if MICROPY_PY_SYS_GETSIZEOF
 STATIC mp_obj_t mp_sys_getsizeof(mp_obj_t obj) {
     return mp_unary_op(MP_UNARY_OP_SIZEOF, obj);
 }
-MP_DEFINE_CONST_FUN_OBJ_1(mp_sys_getsizeof_obj, mp_sys_getsizeof);
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(mp_sys_getsizeof_obj, mp_sys_getsizeof);
+#endif
 
 STATIC const mp_rom_map_elem_t mp_module_sys_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_sys) },

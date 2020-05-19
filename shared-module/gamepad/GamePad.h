@@ -36,10 +36,7 @@ typedef struct {
     digitalio_digitalinout_obj_t* pins[8];
     volatile uint8_t last;
     volatile uint8_t pressed;
+    uint8_t pulls;
 } gamepad_obj_t;
-
-extern gamepad_obj_t* gamepad_singleton;
-
-void gamepad_init(size_t n_pins, const mp_obj_t* pins);
 
 #endif  // MICROPY_INCLUDED_GAMEPAD_GAMEPAD_H

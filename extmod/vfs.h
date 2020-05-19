@@ -28,6 +28,7 @@
 
 #include "py/lexer.h"
 #include "py/obj.h"
+#include "py/proto.h"
 
 // return values of mp_vfs_lookup_path
 // ROOT is 0 so that the default current directory is the root directory
@@ -44,6 +45,12 @@
 #define BP_IOCTL_SYNC           (3)
 #define BP_IOCTL_SEC_COUNT      (4)
 #define BP_IOCTL_SEC_SIZE       (5)
+
+// At the moment the VFS protocol just has import_stat, but could be extended to other methods
+typedef struct _mp_vfs_proto_t {
+    MP_PROTOCOL_HEAD
+    mp_import_stat_t (*import_stat)(void *self, const char *path);
+} mp_vfs_proto_t;
 
 typedef struct _mp_vfs_mount_t {
     const char *str; // mount point with leading /
@@ -62,6 +69,8 @@ typedef struct _mp_vfs_ilistdir_it_t {
     bool is_str;
     bool is_iter;
 } mp_vfs_ilistdir_it_t;
+
+mp_obj_t mp_vfs_ilistdir_it_iternext(mp_obj_t self_in);
 
 mp_vfs_mount_t *mp_vfs_lookup_path(const char *path, const char **path_out);
 mp_import_stat_t mp_vfs_import_stat(const char *path);

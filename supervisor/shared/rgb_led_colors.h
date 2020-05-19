@@ -1,12 +1,18 @@
-#define BLACK   0x000000
-#define GREEN   0x001000
-#define BLUE    0x000010
-#define CYAN    0x001010
-#define RED     0x100000
-#define ORANGE  0x100800
-#define YELLOW  0x101000
-#define PURPLE  0x100010
-#define WHITE   0x101010
+
+#define COLOR(r, g, b) (((r) << 16) | ((g) << 8) | (b))
+// For brightness == 255 (full). This will be adjusted downward for various different RGB indicators,
+// which vary in brightness.
+#define INTENSITY (0x30)
+
+#define BLACK   COLOR(0, 0, 0)
+#define GREEN   COLOR(0, INTENSITY, 0)
+#define BLUE    COLOR(0, 0, INTENSITY)
+#define CYAN    COLOR(0, INTENSITY, INTENSITY)
+#define RED     COLOR(INTENSITY, 0, 0)
+#define ORANGE  COLOR(INTENSITY, INTENSITY*2/3, 0)
+#define YELLOW  COLOR(INTENSITY, INTENSITY, 0)
+#define PURPLE  COLOR(INTENSITY, 0, INTENSITY)
+#define WHITE   COLOR(INTENSITY, INTENSITY, INTENSITY)
 
 #define BOOT_RUNNING BLUE
 #define MAIN_RUNNING GREEN
@@ -31,4 +37,5 @@
 #define NAME_ERROR        WHITE
 #define OS_ERROR          ORANGE
 #define VALUE_ERROR       PURPLE
+#define MPY_ERROR         BLUE
 #define OTHER_ERROR       YELLOW

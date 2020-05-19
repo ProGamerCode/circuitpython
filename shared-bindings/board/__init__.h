@@ -29,6 +29,20 @@
 
 #include "py/obj.h"
 
+#include "shared-bindings/microcontroller/Pin.h"  // for the pin definitions
+
 extern const mp_obj_dict_t board_module_globals;
+
+mp_obj_t common_hal_board_get_i2c(void);
+mp_obj_t common_hal_board_create_i2c(void);
+MP_DECLARE_CONST_FUN_OBJ_0(board_i2c_obj);
+
+mp_obj_t common_hal_board_get_spi(void);
+mp_obj_t common_hal_board_create_spi(void);
+MP_DECLARE_CONST_FUN_OBJ_0(board_spi_obj);
+
+mp_obj_t common_hal_board_get_uart(void);
+mp_obj_t common_hal_board_create_uart(void);
+MP_DECLARE_CONST_FUN_OBJ_0(board_uart_obj);
 
 #endif  // MICROPY_INCLUDED_SHARED_BINDINGS_BOARD___INIT___H

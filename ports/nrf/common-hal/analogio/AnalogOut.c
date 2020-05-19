@@ -3,7 +3,7 @@
  *
  * The MIT License (MIT)
  *
- * Copyright (c) 2013, 2014 Damien P. George
+ * Copyright (c) 2018 Dan Halbert for Adafruit Industries
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,53 +24,25 @@
  * THE SOFTWARE.
  */
 
+#include "shared-bindings/analogio/AnalogOut.h"
+
 #include <stdint.h>
 #include <string.h>
 
 #include "py/mperrno.h"
 #include "py/runtime.h"
-
-#include "shared-bindings/analogio/AnalogOut.h"
-
+#include "supervisor/shared/translate.h"
 
 void common_hal_analogio_analogout_construct(analogio_analogout_obj_t* self, const mcu_pin_obj_t *pin) {
-//    if (pin->pin != PIN_PA02) {
-//        mp_raise_ValueError("AnalogOut not supported on given pin");
-//        return;
-//    }
-//    struct dac_config config_dac;
-//    dac_get_config_defaults(&config_dac);
-//    config_dac.reference = DAC_REFERENCE_AVCC;
-//    enum status_code status = dac_init(&self->dac_instance, DAC, &config_dac);
-//    if (status != STATUS_OK) {
-//        mp_raise_OSError(MP_EIO);
-//        return;
-//    }
-//    claim_pin(pin);
-//
-//    struct dac_chan_config config_analogout_chan;
-//    dac_chan_get_config_defaults(&config_analogout_chan);
-//    dac_chan_set_config(&self->dac_instance, DAC_CHANNEL_0, &config_analogout_chan);
-//    dac_chan_enable(&self->dac_instance, DAC_CHANNEL_0);
-//
-//    dac_enable(&self->dac_instance);
+    mp_raise_RuntimeError(translate("AnalogOut functionality not supported"));
 }
 
 bool common_hal_analogio_analogout_deinited(analogio_analogout_obj_t *self) {
-    return self->deinited;
+    return true;
 }
 
 void common_hal_analogio_analogout_deinit(analogio_analogout_obj_t *self) {
-//    if (common_hal_analogio_analogout_deinited(self)) {
-//        return;
-//    }
-//    dac_disable(&self->dac_instance);
-//    dac_chan_disable(&self->dac_instance, DAC_CHANNEL_0);
-//    reset_pin(PIN_PA02);
-//    self->deinited = true;
 }
 
 void common_hal_analogio_analogout_set_value(analogio_analogout_obj_t *self, uint16_t value) {
-    // Input is 16 bit but we only support 10 bit so we shift the input.
-//    dac_chan_write(&self->dac_instance, DAC_CHANNEL_0, value >> 6);
 }

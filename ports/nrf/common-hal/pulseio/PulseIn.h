@@ -24,8 +24,8 @@
  * THE SOFTWARE.
  */
 
-#ifndef MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_PULSEIO_PULSEIN_H
-#define MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_PULSEIO_PULSEIN_H
+#ifndef MICROPY_INCLUDED_NRF_COMMON_HAL_PULSEIO_PULSEIN_H
+#define MICROPY_INCLUDED_NRF_COMMON_HAL_PULSEIO_PULSEIN_H
 
 #include "common-hal/microcontroller/Pin.h"
 
@@ -33,17 +33,21 @@
 
 typedef struct {
     mp_obj_base_t base;
-    uint8_t channel;
+
     uint8_t pin;
+    bool idle_state;
+    bool paused;
+    volatile bool first_edge;
+
     uint16_t* buffer;
     uint16_t maxlen;
-    bool idle_state;
+
     volatile uint16_t start;
     volatile uint16_t len;
-    volatile bool first_edge;
-    uint16_t ticks_per_ms;
+    volatile size_t last_overflow;
+    volatile size_t last_count;
 } pulseio_pulsein_obj_t;
 
 void pulsein_reset(void);
 
-#endif // MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_PULSEIO_PULSEIN_H
+#endif // MICROPY_INCLUDED_NRF_COMMON_HAL_PULSEIO_PULSEIN_H

@@ -24,24 +24,26 @@
  * THE SOFTWARE.
  */
 
-#ifndef MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_PULSEIO_PWMOUT_H
-#define MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_PULSEIO_PWMOUT_H
+#ifndef MICROPY_INCLUDED_NRF_COMMON_HAL_PULSEIO_PWMOUT_H
+#define MICROPY_INCLUDED_NRF_COMMON_HAL_PULSEIO_PWMOUT_H
 
-#include "common-hal/microcontroller/Pin.h"
-
+#include "nrfx_pwm.h"
 #include "py/obj.h"
 
 typedef struct {
     mp_obj_base_t base;
-    const mcu_pin_obj_t *pin;
     NRF_PWM_Type* pwm;
-
-    uint8_t  channel;
-    bool     variable_freq;
-    uint16_t duty;
-    uint32_t freq;
+    uint8_t pin_number;
+    uint8_t channel: 7;
+    bool variable_frequency: 1;
+    uint16_t duty_cycle;
+    uint32_t frequency;
 } pulseio_pwmout_obj_t;
 
 void pwmout_reset(void);
+NRF_PWM_Type *pwmout_allocate(uint16_t countertop, nrf_pwm_clk_t base_clock,
+    bool variable_frequency, int8_t *channel_out, bool *pwm_already_in_use_out,
+    IRQn_Type *irq);
+void pwmout_free_channel(NRF_PWM_Type *pwm, int8_t channel);
 
-#endif // MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_PULSEIO_PWMOUT_H
+#endif // MICROPY_INCLUDED_NRF_COMMON_HAL_PULSEIO_PWMOUT_H

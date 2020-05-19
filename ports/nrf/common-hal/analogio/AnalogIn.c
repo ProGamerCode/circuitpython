@@ -3,6 +3,7 @@
  *
  * The MIT License (MIT)
  *
+ * Copyright (c) 2019 Dan Halbert for Adafruit Industries
  * Copyright (c) 2016 Scott Shawcroft for Adafruit Industries
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -25,94 +26,97 @@
  */
 
 #include "common-hal/analogio/AnalogIn.h"
-
-#include <string.h>
-
-#include "py/gc.h"
-#include "py/nlr.h"
 #include "py/runtime.h"
-#include "py/binary.h"
-#include "py/mphal.h"
-#include "shared-bindings/analogio/AnalogIn.h"
-#include "nrf.h"
+#include "supervisor/shared/translate.h"
 
-void common_hal_analogio_analogin_construct(analogio_analogin_obj_t* self, const mcu_pin_obj_t *pin) {
-    if (!pin->adc_channel) {
-        // No ADC function on that pin
-        mp_raise_ValueError("Pin does not have ADC capabilities");
-    }
+#include "nrf_saadc.h"
+#include "nrf_gpio.h"
 
-    hal_gpio_cfg_pin(pin->port, pin->pin, HAL_GPIO_MODE_INPUT, HAL_GPIO_PULL_DISABLED);
+#define CHANNEL_NO 0
+
+void analogin_init(void) {
+    // Calibrate the ADC once, on startup.
+    nrf_saadc_enable(NRF_SAADC);
+    nrf_saadc_event_clear(NRF_SAADC, NRF_SAADC_EVENT_CALIBRATEDONE);
+    nrf_saadc_task_trigger(NRF_SAADC, NRF_SAADC_TASK_CALIBRATEOFFSET);
+    while (nrf_saadc_event_check(NRF_SAADC, NRF_SAADC_EVENT_CALIBRATEDONE) == 0) { }
+    nrf_saadc_event_clear(NRF_SAADC, NRF_SAADC_EVENT_CALIBRATEDONE);
+    nrf_saadc_disable(NRF_SAADC);
+}
+
+void common_hal_analogio_analogin_construct(analogio_analogin_obj_t *self, const mcu_pin_obj_t *pin) {
+    if (pin->adc_channel == 0)
+        mp_raise_ValueError(translate("Pin does not have ADC capabilities"));
+
+    nrf_gpio_cfg_default(pin->number);
+
+    claim_pin(pin);
     self->pin = pin;
 }
 
 bool common_hal_analogio_analogin_deinited(analogio_analogin_obj_t *self) {
-    return self->pin == mp_const_none;
+    return self->pin == NULL;
 }
 
 void common_hal_analogio_analogin_deinit(analogio_analogin_obj_t *self) {
-    if (common_hal_analogio_analogin_deinited(self)) {
+    if (common_hal_analogio_analogin_deinited(self))
         return;
-    }
-    reset_pin(self->pin->pin);
-    self->pin = mp_const_none;
-}
 
-void analogin_reset() {
+    nrf_gpio_cfg_default(self->pin->number);
+
+    reset_pin_number(self->pin->number);
+    self->pin = NULL;
 }
 
 uint16_t common_hal_analogio_analogin_get_value(analogio_analogin_obj_t *self) {
-  // Something else might have used the ADC in a different way,
-  // so we completely re-initialize it.
+    // Something else might have used the ADC in a different way,
+    // so we completely re-initialize it.
 
-  int16_t value;
+    nrf_saadc_value_t value;
 
-  NRF_SAADC->RESOLUTION = SAADC_RESOLUTION_VAL_14bit;
-  NRF_SAADC->ENABLE = 1;
+    const nrf_saadc_channel_config_t config = {
+        .resistor_p = NRF_SAADC_RESISTOR_DISABLED,
+        .resistor_n = NRF_SAADC_RESISTOR_DISABLED,
+        .gain = NRF_SAADC_GAIN1_4,
+        .reference = NRF_SAADC_REFERENCE_VDD4,
+        .acq_time = NRF_SAADC_ACQTIME_3US,
+        .mode = NRF_SAADC_MODE_SINGLE_ENDED,
+        .burst = NRF_SAADC_BURST_DISABLED
+    };
 
-  for (int i = 0; i < 8; i++) {
-    NRF_SAADC->CH[i].PSELN = SAADC_CH_PSELP_PSELP_NC;
-    NRF_SAADC->CH[i].PSELP = SAADC_CH_PSELP_PSELP_NC;
-  }
+    nrf_saadc_resolution_set(NRF_SAADC, NRF_SAADC_RESOLUTION_14BIT);
+    nrf_saadc_oversample_set(NRF_SAADC, NRF_SAADC_OVERSAMPLE_DISABLED);
+    nrf_saadc_enable(NRF_SAADC);
 
-  NRF_SAADC->CH[0].CONFIG = ((SAADC_CH_CONFIG_RESP_Bypass       << SAADC_CH_CONFIG_RESP_Pos)   & SAADC_CH_CONFIG_RESP_Msk)
-                            | ((SAADC_CH_CONFIG_RESP_Bypass     << SAADC_CH_CONFIG_RESN_Pos)   & SAADC_CH_CONFIG_RESN_Msk)
-                            | ((SAADC_CH_CONFIG_GAIN_Gain1_6    << SAADC_CH_CONFIG_GAIN_Pos)   & SAADC_CH_CONFIG_GAIN_Msk)
-                            | ((SAADC_CH_CONFIG_REFSEL_Internal << SAADC_CH_CONFIG_REFSEL_Pos) & SAADC_CH_CONFIG_REFSEL_Msk)
-                            | ((SAADC_CH_CONFIG_TACQ_3us        << SAADC_CH_CONFIG_TACQ_Pos)   & SAADC_CH_CONFIG_TACQ_Msk)
-                            | ((SAADC_CH_CONFIG_MODE_SE         << SAADC_CH_CONFIG_MODE_Pos)   & SAADC_CH_CONFIG_MODE_Msk);
-  NRF_SAADC->CH[0].PSELN = self->pin->adc_channel;
-  NRF_SAADC->CH[0].PSELP = self->pin->adc_channel;
+    for (uint32_t i = 0; i < SAADC_CH_NUM; i++)
+        nrf_saadc_channel_input_set(NRF_SAADC, i, NRF_SAADC_INPUT_DISABLED, NRF_SAADC_INPUT_DISABLED);
 
+    nrf_saadc_channel_init(NRF_SAADC, CHANNEL_NO, &config);
+    nrf_saadc_channel_input_set(NRF_SAADC, CHANNEL_NO, self->pin->adc_channel, self->pin->adc_channel);
+    nrf_saadc_buffer_init(NRF_SAADC, &value, 1);
 
-  NRF_SAADC->RESULT.PTR = (uint32_t)&value;
-  NRF_SAADC->RESULT.MAXCNT = 1;
+    nrf_saadc_task_trigger(NRF_SAADC, NRF_SAADC_TASK_START);
+    while (nrf_saadc_event_check(NRF_SAADC, NRF_SAADC_EVENT_STARTED) == 0);
+    nrf_saadc_event_clear(NRF_SAADC, NRF_SAADC_EVENT_STARTED);
 
-  NRF_SAADC->TASKS_START = 0x01UL;
+    nrf_saadc_task_trigger(NRF_SAADC, NRF_SAADC_TASK_SAMPLE);
+    while (nrf_saadc_event_check(NRF_SAADC, NRF_SAADC_EVENT_END) == 0);
+    nrf_saadc_event_clear(NRF_SAADC, NRF_SAADC_EVENT_END);
 
-  while (!NRF_SAADC->EVENTS_STARTED);
-  NRF_SAADC->EVENTS_STARTED = 0x00UL;
+    nrf_saadc_task_trigger(NRF_SAADC, NRF_SAADC_TASK_STOP);
+    while (nrf_saadc_event_check(NRF_SAADC, NRF_SAADC_EVENT_STOPPED) == 0);
+    nrf_saadc_event_clear(NRF_SAADC, NRF_SAADC_EVENT_STOPPED);
 
-  NRF_SAADC->TASKS_SAMPLE = 0x01UL;
+    nrf_saadc_disable(NRF_SAADC);
 
-  while (!NRF_SAADC->EVENTS_END);
-  NRF_SAADC->EVENTS_END = 0x00UL;
+    if (value < 0)
+        value = 0;
 
-  NRF_SAADC->TASKS_STOP = 0x01UL;
-
-  while (!NRF_SAADC->EVENTS_STOPPED);
-  NRF_SAADC->EVENTS_STOPPED = 0x00UL;
-
-  if (value < 0) {
-    value = 0;
-  }
-
-  NRF_SAADC->ENABLE = 0;
-
-  // Map value to from 14 to 16 bits
-  return (value << 2);
+    // Map value to from 14 to 16 bits
+    return (value << 2);
 }
 
 float common_hal_analogio_analogin_get_reference_voltage(analogio_analogin_obj_t *self) {
+    // The nominal VCC voltage
     return 3.3f;
 }

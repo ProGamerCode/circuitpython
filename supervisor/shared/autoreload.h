@@ -29,7 +29,7 @@
 
 #include <stdbool.h>
 
-extern volatile bool reload_next_character;
+extern volatile bool reload_requested;
 
 void autoreload_tick(void);
 
@@ -42,5 +42,7 @@ bool autoreload_is_enabled(void);
 // Temporarily turn it off. Used during the REPL.
 void autoreload_suspend(void);
 void autoreload_resume(void);
+
+void autoreload_now(void);
 
 #endif  // MICROPY_INCLUDED_SUPERVISOR_AUTORELOAD_H

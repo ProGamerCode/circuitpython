@@ -34,6 +34,8 @@
 #include "py/bc.h"
 #include "py/stackctrl.h"
 
+#include "supervisor/linker.h"
+
 #if MICROPY_DEBUG_VERBOSE // print debugging info
 #define DEBUG_PRINT (1)
 #else // don't print debugging info
@@ -52,7 +54,7 @@ STATIC mp_obj_t fun_builtin_0_call(mp_obj_t self_in, size_t n_args, size_t n_kw,
     (void)args;
     assert(MP_OBJ_IS_TYPE(self_in, &mp_type_fun_builtin_0));
     mp_obj_fun_builtin_fixed_t *self = MP_OBJ_TO_PTR(self_in);
-    mp_arg_check_num(n_args, n_kw, 0, 0, false);
+    mp_arg_check_num_kw_array(n_args, n_kw, 0, 0, false);
     return self->fun._0();
 }
 
@@ -66,7 +68,7 @@ const mp_obj_type_t mp_type_fun_builtin_0 = {
 STATIC mp_obj_t fun_builtin_1_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args) {
     assert(MP_OBJ_IS_TYPE(self_in, &mp_type_fun_builtin_1));
     mp_obj_fun_builtin_fixed_t *self = MP_OBJ_TO_PTR(self_in);
-    mp_arg_check_num(n_args, n_kw, 1, 1, false);
+    mp_arg_check_num_kw_array(n_args, n_kw, 1, 1, false);
     return self->fun._1(args[0]);
 }
 
@@ -80,7 +82,7 @@ const mp_obj_type_t mp_type_fun_builtin_1 = {
 STATIC mp_obj_t fun_builtin_2_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args) {
     assert(MP_OBJ_IS_TYPE(self_in, &mp_type_fun_builtin_2));
     mp_obj_fun_builtin_fixed_t *self = MP_OBJ_TO_PTR(self_in);
-    mp_arg_check_num(n_args, n_kw, 2, 2, false);
+    mp_arg_check_num_kw_array(n_args, n_kw, 2, 2, false);
     return self->fun._2(args[0], args[1]);
 }
 
@@ -94,7 +96,7 @@ const mp_obj_type_t mp_type_fun_builtin_2 = {
 STATIC mp_obj_t fun_builtin_3_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args) {
     assert(MP_OBJ_IS_TYPE(self_in, &mp_type_fun_builtin_3));
     mp_obj_fun_builtin_fixed_t *self = MP_OBJ_TO_PTR(self_in);
-    mp_arg_check_num(n_args, n_kw, 3, 3, false);
+    mp_arg_check_num_kw_array(n_args, n_kw, 3, 3, false);
     return self->fun._3(args[0], args[1], args[2]);
 }
 
@@ -110,7 +112,7 @@ STATIC mp_obj_t fun_builtin_var_call(mp_obj_t self_in, size_t n_args, size_t n_k
     mp_obj_fun_builtin_var_t *self = MP_OBJ_TO_PTR(self_in);
 
     // check number of arguments
-    mp_arg_check_num(n_args, n_kw, self->n_args_min, self->n_args_max, self->is_kw);
+    mp_arg_check_num_kw_array(n_args, n_kw, self->n_args_min, self->n_args_max, self->is_kw);
 
     if (self->is_kw) {
         // function allows keywords
@@ -195,39 +197,61 @@ STATIC void dump_args(const mp_obj_t *a, size_t sz) {
 // than this will try to use the heap, with fallback to stack allocation.
 #define VM_MAX_STATE_ON_STACK (11 * sizeof(mp_uint_t))
 
-// Set this to enable a simple stack overflow check.
+// Set this to 1 to enable a simple stack overflow check.
 #define VM_DETECT_STACK_OVERFLOW (0)
+
+#define DECODE_CODESTATE_SIZE(bytecode, n_state_out_var, state_size_out_var) \
+    { \
+        /* bytecode prelude: state size and exception stack size */               \
+        n_state_out_var = mp_decode_uint_value(bytecode);                         \
+        size_t n_exc_stack = mp_decode_uint_value(mp_decode_uint_skip(bytecode)); \
+                                                                                  \
+        n_state_out_var += VM_DETECT_STACK_OVERFLOW;                              \
+                                                                                  \
+        /* state size in bytes */                                                 \
+        state_size_out_var = n_state_out_var * sizeof(mp_obj_t)                   \
+                           + n_exc_stack * sizeof(mp_exc_stack_t);                \
+    }
+
+#define INIT_CODESTATE(code_state, _fun_bc, n_args, n_kw, args) \
+    code_state->fun_bc = _fun_bc; \
+    code_state->ip = 0; \
+    mp_setup_code_state(code_state, n_args, n_kw, args); \
+    code_state->old_globals = mp_globals_get();
 
 #if MICROPY_STACKLESS
 mp_code_state_t *mp_obj_fun_bc_prepare_codestate(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args) {
     MP_STACK_CHECK();
     mp_obj_fun_bc_t *self = MP_OBJ_TO_PTR(self_in);
 
-    // bytecode prelude: state size and exception stack size
-    size_t n_state = mp_decode_uint_value(self->bytecode);
-    size_t n_exc_stack = mp_decode_uint_value(mp_decode_uint_skip(self->bytecode));
+    size_t n_state, state_size;
+    DECODE_CODESTATE_SIZE(self->bytecode, n_state, state_size);
 
-    // allocate state for locals and stack
-    size_t state_size = n_state * sizeof(mp_obj_t) + n_exc_stack * sizeof(mp_exc_stack_t);
     mp_code_state_t *code_state;
+    #if MICROPY_ENABLE_PYSTACK
+    code_state = mp_pystack_alloc(sizeof(mp_code_state_t) + state_size);
+    #else
+    // If we use m_new_obj_var(), then on no memory, MemoryError will be
+    // raised. But this is not correct exception for a function call,
+    // RuntimeError should be raised instead. So, we use m_new_obj_var_maybe(),
+    // return NULL, then vm.c takes the needed action (either raise
+    // RuntimeError or fallback to stack allocation).
     code_state = m_new_obj_var_maybe(mp_code_state_t, byte, state_size);
     if (!code_state) {
         return NULL;
     }
+    #endif
 
-    code_state->fun_bc = self;
-    code_state->ip = 0;
-    mp_setup_code_state(code_state, n_args, n_kw, args);
+    INIT_CODESTATE(code_state, self, n_args, n_kw, args);
 
     // execute the byte code with the correct globals context
-    code_state->old_globals = mp_globals_get();
     mp_globals_set(self->globals);
 
     return code_state;
 }
 #endif
 
-STATIC mp_obj_t fun_bc_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args) {
+STATIC mp_obj_t PLACE_IN_ITCM(fun_bc_call)(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args) {
     MP_STACK_CHECK();
 
     DEBUG_printf("Input n_args: " UINT_FMT ", n_kw: " UINT_FMT "\n", n_args, n_kw);
@@ -238,17 +262,14 @@ STATIC mp_obj_t fun_bc_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const 
     mp_obj_fun_bc_t *self = MP_OBJ_TO_PTR(self_in);
     DEBUG_printf("Func n_def_args: %d\n", self->n_def_args);
 
-    // bytecode prelude: state size and exception stack size
-    size_t n_state = mp_decode_uint_value(self->bytecode);
-    size_t n_exc_stack = mp_decode_uint_value(mp_decode_uint_skip(self->bytecode));
-
-#if VM_DETECT_STACK_OVERFLOW
-    n_state += 1;
-#endif
+    size_t n_state, state_size;
+    DECODE_CODESTATE_SIZE(self->bytecode, n_state, state_size);
 
     // allocate state for locals and stack
-    size_t state_size = n_state * sizeof(mp_obj_t) + n_exc_stack * sizeof(mp_exc_stack_t);
     mp_code_state_t *code_state = NULL;
+    #if MICROPY_ENABLE_PYSTACK
+    code_state = mp_pystack_alloc(sizeof(mp_code_state_t) + state_size);
+    #else
     if (state_size > VM_MAX_STATE_ON_STACK) {
         code_state = m_new_obj_var_maybe(mp_code_state_t, byte, state_size);
     }
@@ -256,13 +277,11 @@ STATIC mp_obj_t fun_bc_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const 
         code_state = alloca(sizeof(mp_code_state_t) + state_size);
         state_size = 0; // indicate that we allocated using alloca
     }
+    #endif
 
-    code_state->fun_bc = self;
-    code_state->ip = 0;
-    mp_setup_code_state(code_state, n_args, n_kw, args);
+    INIT_CODESTATE(code_state, self, n_args, n_kw, args);
 
     // execute the byte code with the correct globals context
-    code_state->old_globals = mp_globals_get();
     mp_globals_set(self->globals);
     mp_vm_return_kind_t vm_return_kind = mp_execute_bytecode(code_state, MP_OBJ_NULL);
     mp_globals_set(code_state->old_globals);
@@ -304,10 +323,14 @@ STATIC mp_obj_t fun_bc_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const 
         result = code_state->state[n_state - 1];
     }
 
+    #if MICROPY_ENABLE_PYSTACK
+    mp_pystack_free(code_state);
+    #else
     // free the state if it was allocated on the heap
     if (state_size != 0) {
         m_del_var(mp_code_state_t, byte, state_size, code_state);
     }
+    #endif
 
     if (vm_return_kind == MP_VM_RETURN_NORMAL) {
         return result;
@@ -415,7 +438,7 @@ typedef mp_uint_t (*viper_fun_4_t)(mp_uint_t, mp_uint_t, mp_uint_t, mp_uint_t);
 STATIC mp_obj_t fun_viper_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args) {
     mp_obj_fun_viper_t *self = self_in;
 
-    mp_arg_check_num(n_args, n_kw, self->n_args, self->n_args, false);
+    mp_arg_check_num_kw_array(n_args, n_kw, self->n_args, self->n_args, false);
 
     void *fun = MICROPY_MAKE_POINTER_CALLABLE(self->fun_data);
 
@@ -525,7 +548,7 @@ STATIC mp_uint_t convert_obj_for_inline_asm(mp_obj_t obj) {
 STATIC mp_obj_t fun_asm_call(mp_obj_t self_in, size_t n_args, size_t n_kw, const mp_obj_t *args) {
     mp_obj_fun_asm_t *self = self_in;
 
-    mp_arg_check_num(n_args, n_kw, self->n_args, self->n_args, false);
+    mp_arg_check_num_kw_array(n_args, n_kw, self->n_args, self->n_args, false);
 
     void *fun = MICROPY_MAKE_POINTER_CALLABLE(self->fun_data);
 

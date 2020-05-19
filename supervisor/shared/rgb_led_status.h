@@ -33,8 +33,10 @@
 #include "lib/utils/pyexec.h"
 #include "supervisor/port.h"
 
-#include "mpconfigport.h"
+#include "py/mpconfig.h"
 #include "rgb_led_colors.h"
+
+#include "supervisor/shared/safe_mode.h"
 
 // Overall, the time module must be implemented.
 // To work with a DotStar, one must have MICROPY_HW_APA102_SCK and
@@ -42,7 +44,7 @@
 // To work with a NeoPixel, one must have MICROPY_HW_NEOPIXEL defined and
 // neopixel_write implemented.
 
-#if defined(MICROPY_HW_APA102_MOSI) && defined(MICROPY_HW_APA102_SCK) && !defined(CIRCUITPY_BITBANG_APA102)
+#if defined(MICROPY_HW_APA102_MOSI) && defined(MICROPY_HW_APA102_SCK) && !CIRCUITPY_BITBANG_APA102
 #include "common-hal/busio/SPI.h"
 extern busio_spi_obj_t status_apa102;
 #endif

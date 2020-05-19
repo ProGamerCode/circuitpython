@@ -30,11 +30,15 @@
 #include <assert.h>
 
 #include "py/compile.h"
+#include "py/gc_long_lived.h"
+#include "py/gc.h"
 #include "py/objmodule.h"
 #include "py/persistentcode.h"
 #include "py/runtime.h"
 #include "py/builtin.h"
 #include "py/frozenmod.h"
+
+#include "supervisor/shared/translate.h"
 
 #if MICROPY_DEBUG_VERBOSE // print debugging info
 #define DEBUG_PRINT (1)
@@ -43,6 +47,8 @@
 #define DEBUG_PRINT (0)
 #define DEBUG_printf(...) (void)0
 #endif
+
+#if MICROPY_ENABLE_EXTERNAL_IMPORT
 
 #define PATH_SEP_CHAR '/'
 
@@ -144,15 +150,14 @@ STATIC void do_load_from_lexer(mp_obj_t module_obj, mp_lexer_t *lex) {
     // parse, compile and execute the module in its context
     mp_obj_dict_t *mod_globals = mp_obj_module_get_globals(module_obj);
     mp_parse_compile_execute(lex, MP_PARSE_FILE_INPUT, mod_globals, mod_globals);
+    mp_obj_module_set_globals(module_obj, make_dict_long_lived(mod_globals, 10));
 }
 #endif
 
 #if MICROPY_PERSISTENT_CODE_LOAD || MICROPY_MODULE_FROZEN_MPY
-STATIC void do_execute_raw_code(mp_obj_t module_obj, mp_raw_code_t *raw_code) {
+STATIC void do_execute_raw_code(mp_obj_t module_obj, mp_raw_code_t *raw_code, const char *filename) {
     #if MICROPY_PY___FILE__
-    // TODO
-    //qstr source_name = lex->source_name;
-    //mp_store_attr(module_obj, MP_QSTR___file__, MP_OBJ_NEW_QSTR(source_name));
+    mp_store_attr(module_obj, MP_QSTR___file__, MP_OBJ_NEW_QSTR(qstr_from_str(filename)));
     #endif
 
     // execute the module in its context
@@ -173,6 +178,8 @@ STATIC void do_execute_raw_code(mp_obj_t module_obj, mp_raw_code_t *raw_code) {
 
         // finish nlr block, restore context
         nlr_pop();
+        mp_obj_module_set_globals(module_obj,
+            make_dict_long_lived(mp_obj_module_get_globals(module_obj), 10));
         mp_globals_set(old_globals);
         mp_locals_set(old_locals);
     } else {
@@ -213,7 +220,7 @@ STATIC void do_load(mp_obj_t module_obj, vstr_t *file) {
         // its data) in the list of frozen files, execute it.
         #if MICROPY_MODULE_FROZEN_MPY
         if (frozen_type == MP_FROZEN_MPY) {
-            do_execute_raw_code(module_obj, modref);
+            do_execute_raw_code(module_obj, modref, file_str);
             return;
         }
         #endif
@@ -226,7 +233,7 @@ STATIC void do_load(mp_obj_t module_obj, vstr_t *file) {
     #if MICROPY_PERSISTENT_CODE_LOAD
     if (file_str[file->len - 3] == 'm') {
         mp_raw_code_t *raw_code = mp_raw_code_load_file(file_str);
-        do_execute_raw_code(module_obj, raw_code);
+        do_execute_raw_code(module_obj, raw_code, file_str);
         return;
     }
     #endif
@@ -241,7 +248,7 @@ STATIC void do_load(mp_obj_t module_obj, vstr_t *file) {
     #else
 
     // If we get here then the file was not frozen and we can't compile scripts.
-    mp_raise_ImportError("script compilation not supported");
+    mp_raise_ImportError(translate("script compilation not supported"));
     #endif
 }
 
@@ -326,11 +333,11 @@ mp_obj_t mp_builtin___import__(size_t n_args, const mp_obj_t *args) {
 
         // We must have some component left over to import from
         if (p == this_name) {
-            mp_raise_ValueError("cannot perform relative import");
+            mp_raise_ValueError(translate("cannot perform relative import"));
         }
 
         uint new_mod_l = (mod_len == 0 ? (size_t)(p - this_name) : (size_t)(p - this_name) + 1 + mod_len);
-        char *new_mod = alloca(new_mod_l);
+        char *new_mod = mp_local_alloc(new_mod_l);
         memcpy(new_mod, this_name, p - this_name);
         if (mod_len != 0) {
             new_mod[p - this_name] = '.';
@@ -338,9 +345,10 @@ mp_obj_t mp_builtin___import__(size_t n_args, const mp_obj_t *args) {
         }
 
         qstr new_mod_q = qstr_from_strn(new_mod, new_mod_l);
+        mp_local_free(new_mod);
         DEBUG_printf("Resolved base name for relative import: '%s'\n", qstr_str(new_mod_q));
         module_name = MP_OBJ_NEW_QSTR(new_mod_q);
-        mod_str = new_mod;
+        mod_str = qstr_str(new_mod_q);
         mod_len = new_mod_l;
     }
 
@@ -392,26 +400,37 @@ mp_obj_t mp_builtin___import__(size_t n_args, const mp_obj_t *args) {
             DEBUG_printf("Current path: %.*s\n", vstr_len(&path), vstr_str(&path));
 
             if (stat == MP_IMPORT_STAT_NO_EXIST) {
-                #if MICROPY_MODULE_WEAK_LINKS
-                // check if there is a weak link to this module
-                if (i == mod_len) {
-                    mp_map_elem_t *el = mp_map_lookup((mp_map_t*)&mp_builtin_module_weak_links_map, MP_OBJ_NEW_QSTR(mod_name), MP_MAP_LOOKUP);
+                // This is just the module name after the previous .
+                qstr current_module_name = qstr_from_strn(mod_str + last, i - last);
+                mp_map_elem_t *el = NULL;
+                if (outer_module_obj == MP_OBJ_NULL) {
+                    el = mp_map_lookup((mp_map_t*)&mp_builtin_module_map,
+                                       MP_OBJ_NEW_QSTR(current_module_name),
+                                       MP_MAP_LOOKUP);
+                    #if MICROPY_MODULE_WEAK_LINKS
+                    // check if there is a weak link to this module
                     if (el == NULL) {
-                        goto no_exist;
+                        el = mp_map_lookup((mp_map_t*)&mp_builtin_module_weak_links_map,
+                                           MP_OBJ_NEW_QSTR(current_module_name),
+                                           MP_MAP_LOOKUP);
                     }
-                    // found weak linked module
-                    module_obj = el->value;
+                    #endif
                 } else {
-                    no_exist:
-                #else
-                {
-                #endif
+                    el = mp_map_lookup(&((mp_obj_module_t*) outer_module_obj)->globals->map,
+                                       MP_OBJ_NEW_QSTR(current_module_name),
+                                       MP_MAP_LOOKUP);
+                }
+
+                if (el != NULL && MP_OBJ_IS_TYPE(el->value, &mp_type_module)) {
+                    module_obj = el->value;
+                    mp_module_call_init(mod_name, module_obj);
+                } else {
                     // couldn't find the file, so fail
                     if (MICROPY_ERROR_REPORTING == MICROPY_ERROR_REPORTING_TERSE) {
-                        mp_raise_ImportError("module not found");
+                        mp_raise_ImportError(translate("module not found"));
                     } else {
                         mp_raise_msg_varg(&mp_type_ImportError,
-                            "no module named '%q'", mod_name);
+                            translate("no module named '%q'"), mod_name);
                     }
                 }
             } else {
@@ -447,7 +466,7 @@ mp_obj_t mp_builtin___import__(size_t n_args, const mp_obj_t *args) {
                     DEBUG_printf("%.*s is dir\n", vstr_len(&path), vstr_str(&path));
                     // https://docs.python.org/3/reference/import.html
                     // "Specifically, any module that contains a __path__ attribute is considered a package."
-                    mp_store_attr(module_obj, MP_QSTR___path__, mp_obj_new_str(vstr_str(&path), vstr_len(&path), false));
+                    mp_store_attr(module_obj, MP_QSTR___path__, mp_obj_new_str(vstr_str(&path), vstr_len(&path)));
                     size_t orig_path_len = path.len;
                     vstr_add_char(&path, PATH_SEP_CHAR);
                     vstr_add_str(&path, "__init__.py");
@@ -464,10 +483,18 @@ mp_obj_t mp_builtin___import__(size_t n_args, const mp_obj_t *args) {
                     // (the module that was just loaded) is not a package.  This will be caught
                     // on the next iteration because the file will not exist.
                 }
+
+                // Loading a module thrashes the heap significantly so we explicitly clean up
+                // afterwards.
+                gc_collect();
             }
             if (outer_module_obj != MP_OBJ_NULL) {
                 qstr s = qstr_from_strn(mod_str + last, i - last);
                 mp_store_attr(outer_module_obj, s, module_obj);
+                // The above store can cause a dictionary rehash and new allocation. So,
+                // lets make sure the globals dictionary is still long lived.
+                mp_obj_module_set_globals(outer_module_obj,
+                    make_dict_long_lived(mp_obj_module_get_globals(outer_module_obj), 10));
             }
             outer_module_obj = module_obj;
             if (top_module_obj == MP_OBJ_NULL) {
@@ -484,4 +511,41 @@ mp_obj_t mp_builtin___import__(size_t n_args, const mp_obj_t *args) {
     // Otherwise, we need to return top-level package
     return top_module_obj;
 }
+
+#else // MICROPY_ENABLE_EXTERNAL_IMPORT
+
+mp_obj_t mp_builtin___import__(size_t n_args, const mp_obj_t *args) {
+    // Check that it's not a relative import
+    if (n_args >= 5 && MP_OBJ_SMALL_INT_VALUE(args[4]) != 0) {
+        mp_raise_NotImplementedError(translate("relative import"));
+    }
+
+    // Check if module already exists, and return it if it does
+    qstr module_name_qstr = mp_obj_str_get_qstr(args[0]);
+    mp_obj_t module_obj = mp_module_get(module_name_qstr);
+    if (module_obj != MP_OBJ_NULL) {
+        return module_obj;
+    }
+
+    #if MICROPY_MODULE_WEAK_LINKS
+    // Check if there is a weak link to this module
+    mp_map_elem_t *el = mp_map_lookup((mp_map_t*)&mp_builtin_module_weak_links_map, MP_OBJ_NEW_QSTR(module_name_qstr), MP_MAP_LOOKUP);
+    if (el != NULL) {
+        // Found weak-linked module
+        mp_module_call_init(module_name_qstr, el->value);
+        return el->value;
+    }
+    #endif
+
+    // Couldn't find the module, so fail
+    if (MICROPY_ERROR_REPORTING == MICROPY_ERROR_REPORTING_TERSE) {
+        mp_raise_msg(&mp_type_ImportError, translate("module not found"));
+    } else {
+        nlr_raise(mp_obj_new_exception_msg_varg(&mp_type_ImportError,
+            translate("no module named '%q'"), module_name_qstr));
+    }
+}
+
+#endif // MICROPY_ENABLE_EXTERNAL_IMPORT
+
 MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(mp_builtin___import___obj, 1, 5, mp_builtin___import__);

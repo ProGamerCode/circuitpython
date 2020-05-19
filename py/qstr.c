@@ -28,9 +28,12 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "py/gc.h"
 #include "py/mpstate.h"
 #include "py/qstr.h"
 #include "py/gc.h"
+
+#include "supervisor/linker.h"
 
 // NOTE: we are using linear arrays to store and search for qstr's (unique strings, interned strings)
 // ultimately we will replace this with a static hash table of some kind
@@ -103,7 +106,9 @@ const qstr_pool_t mp_qstr_const_pool = {
     {
 #ifndef NO_QSTR
 #define QDEF(id, str) str,
+#define TRANSLATION(id, length, compressed...)
 #include "genhdr/qstrdefs.generated.h"
+#undef TRANSLATION
 #undef QDEF
 #endif
     },
@@ -127,14 +132,12 @@ void qstr_init(void) {
 
 STATIC const byte *find_qstr(qstr q) {
     // search pool for this qstr
-    for (qstr_pool_t *pool = MP_STATE_VM(last_pool); pool != NULL; pool = pool->prev) {
-        if (q >= pool->total_prev_len) {
-            return pool->qstrs[q - pool->total_prev_len];
-        }
+    // total_prev_len==0 in the final pool, so the loop will always terminate
+    qstr_pool_t *pool = MP_STATE_VM(last_pool);
+    while (q < pool->total_prev_len) {
+        pool = pool->prev;
     }
-
-    // not found
-    return 0;
+    return pool->qstrs[q - pool->total_prev_len];
 }
 
 // qstr_mutex must be taken while in this function
@@ -143,14 +146,18 @@ STATIC qstr qstr_add(const byte *q_ptr) {
 
     // make sure we have room in the pool for a new qstr
     if (MP_STATE_VM(last_pool)->len >= MP_STATE_VM(last_pool)->alloc) {
-        qstr_pool_t *pool = m_new_obj_var_maybe(qstr_pool_t, const char*, MP_STATE_VM(last_pool)->alloc * 2);
+        uint32_t new_pool_length = MP_STATE_VM(last_pool)->alloc * 2;
+        if (new_pool_length > MICROPY_QSTR_POOL_MAX_ENTRIES) {
+            new_pool_length = MICROPY_QSTR_POOL_MAX_ENTRIES;
+        }
+        qstr_pool_t *pool = m_new_ll_obj_var_maybe(qstr_pool_t, const char*, new_pool_length);
         if (pool == NULL) {
             QSTR_EXIT();
-            m_malloc_fail(MP_STATE_VM(last_pool)->alloc * 2);
+            m_malloc_fail(new_pool_length);
         }
         pool->prev = MP_STATE_VM(last_pool);
         pool->total_prev_len = MP_STATE_VM(last_pool)->total_prev_len + MP_STATE_VM(last_pool)->len;
-        pool->alloc = MP_STATE_VM(last_pool)->alloc * 2;
+        pool->alloc = new_pool_length;
         pool->len = 0;
         MP_STATE_VM(last_pool) = pool;
         DEBUG_printf("QSTR: allocate new pool of size %d\n", MP_STATE_VM(last_pool)->alloc);
@@ -213,10 +220,10 @@ qstr qstr_from_strn(const char *str, size_t len) {
             if (al < MICROPY_ALLOC_QSTR_CHUNK_INIT) {
                 al = MICROPY_ALLOC_QSTR_CHUNK_INIT;
             }
-            MP_STATE_VM(qstr_last_chunk) = m_new_maybe(byte, al);
+            MP_STATE_VM(qstr_last_chunk) = m_new_ll_maybe(byte, al);
             if (MP_STATE_VM(qstr_last_chunk) == NULL) {
                 // failed to allocate a large chunk so try with exact size
-                MP_STATE_VM(qstr_last_chunk) = m_new_maybe(byte, n_bytes);
+                MP_STATE_VM(qstr_last_chunk) = m_new_ll_maybe(byte, n_bytes);
                 if (MP_STATE_VM(qstr_last_chunk) == NULL) {
                     QSTR_EXIT();
                     m_malloc_fail(n_bytes);
@@ -243,30 +250,7 @@ qstr qstr_from_strn(const char *str, size_t len) {
     return q;
 }
 
-byte *qstr_build_start(size_t len, byte **q_ptr) {
-    assert(len < (1 << (8 * MICROPY_QSTR_BYTES_IN_LEN)));
-    *q_ptr = m_new(byte, MICROPY_QSTR_BYTES_IN_HASH + MICROPY_QSTR_BYTES_IN_LEN + len + 1);
-    Q_SET_LENGTH(*q_ptr, len);
-    return Q_GET_DATA(*q_ptr);
-}
-
-qstr qstr_build_end(byte *q_ptr) {
-    QSTR_ENTER();
-    qstr q = qstr_find_strn((const char*)Q_GET_DATA(q_ptr), Q_GET_LENGTH(q_ptr));
-    if (q == 0) {
-        size_t len = Q_GET_LENGTH(q_ptr);
-        mp_uint_t hash = qstr_compute_hash(Q_GET_DATA(q_ptr), len);
-        Q_SET_HASH(q_ptr, hash);
-        q_ptr[MICROPY_QSTR_BYTES_IN_HASH + MICROPY_QSTR_BYTES_IN_LEN + len] = '\0';
-        q = qstr_add(q_ptr);
-    } else {
-        m_del(byte, q_ptr, Q_GET_ALLOC(q_ptr));
-    }
-    QSTR_EXIT();
-    return q;
-}
-
-mp_uint_t qstr_hash(qstr q) {
+mp_uint_t PLACE_IN_ITCM(qstr_hash)(qstr q) {
     return Q_GET_HASH(find_qstr(q));
 }
 

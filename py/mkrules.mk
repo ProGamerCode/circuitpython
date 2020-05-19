@@ -20,12 +20,12 @@ endif
 # can be located. By following this scheme, it allows a single build rule
 # to be used to compile all .c files.
 
-vpath %.S . $(TOP)
+vpath %.S . $(TOP) $(USER_C_MODULES)
 $(BUILD)/%.o: %.S
 	$(STEPECHO) "CC $<"
 	$(Q)$(CC) $(CFLAGS) -c -o $@ $<
 
-vpath %.s . $(TOP)
+vpath %.s . $(TOP) $(USER_C_MODULES)
 $(BUILD)/%.o: %.s
 	$(STEPECHO) "AS $<"
 	$(Q)$(AS) -o $@ $<
@@ -42,9 +42,11 @@ $(Q)$(CC) $(CFLAGS) -c -MD -o $@ $<
   $(RM) -f $(@:.o=.d)
 endef
 
-vpath %.c . $(TOP)
+vpath %.c . $(TOP) $(USER_C_MODULES)
 $(BUILD)/%.o: %.c
 	$(call compile_c)
+
+QSTR_GEN_EXTRA_CFLAGS += -DNO_QSTR
 
 # frozen.c and frozen_mpy.c are created in $(BUILD), so use our rule
 # for those as well.
@@ -52,13 +54,9 @@ vpath %.c . $(BUILD)
 $(BUILD)/%.o: %.c
 	$(call compile_c)
 
-# List all native flags since the current build system doesn't have
-# the MicroPython configuration available. However, these flags are
-# needed to extract all qstrings
-QSTR_GEN_EXTRA_CFLAGS += -DNO_QSTR -DN_X64 -DN_X86 -DN_THUMB -DN_ARM -DN_XTENSA
 QSTR_GEN_EXTRA_CFLAGS += -I$(BUILD)/tmp
 
-vpath %.c . $(TOP)
+vpath %.c . $(TOP) $(USER_C_MODULES)
 
 $(BUILD)/%.pp: %.c
 	$(STEPECHO) "PreProcess $<"
@@ -73,20 +71,24 @@ $(BUILD)/%.pp: %.c
 # the right .o's to get recompiled if the generated.h file changes. Adding
 # an order-only dependency to all of the .o's will cause the generated .h
 # to get built before we try to compile any of them.
-$(OBJ): | $(HEADER_BUILD)/qstrdefs.generated.h $(HEADER_BUILD)/mpversion.h
+$(OBJ): | $(HEADER_BUILD)/qstrdefs.enum.h $(HEADER_BUILD)/mpversion.h
 
-$(HEADER_BUILD)/qstr.i.last: $(SRC_QSTR) | $(HEADER_BUILD)/mpversion.h
-	$(ECHO) "GEN $@"
-	$(Q)$(CPP) $(QSTR_GEN_EXTRA_CFLAGS) $(CFLAGS) $(if $?,$?,$^) >$(HEADER_BUILD)/qstr.i.last;
-
-$(HEADER_BUILD)/qstr.split: $(HEADER_BUILD)/qstr.i.last
+# The logic for qstr regeneration is:
+# - if anything in QSTR_GLOBAL_DEPENDENCIES is newer, then process all source files ($^)
+# - else, if list of newer prerequisites ($?) is not empty, then process just these ($?)
+# - else, process all source files ($^) [this covers "make -B" which can set $? to empty]
+$(HEADER_BUILD)/qstr.i.last: $(SRC_QSTR) $(SRC_QSTR_PREPROCESSOR) $(QSTR_GLOBAL_DEPENDENCIES) | $(HEADER_BUILD)/mpversion.h
 	$(STEPECHO) "GEN $@"
-	$(Q)$(PYTHON) $(PY_SRC)/makeqstrdefs.py split $(HEADER_BUILD)/qstr.i.last $(HEADER_BUILD)/qstr $(QSTR_DEFS_COLLECTED)
+	$(Q)grep -lE "(MP_QSTR|translate)" $(if $(filter $?,$(QSTR_GLOBAL_DEPENDENCIES)),$^,$(if $?,$?,$^)) | xargs $(CPP) $(QSTR_GEN_EXTRA_CFLAGS) $(CFLAGS) $(SRC_QSTR_PREPROCESSOR) >$(HEADER_BUILD)/qstr.i.last;
+
+$(HEADER_BUILD)/qstr.split: $(HEADER_BUILD)/qstr.i.last $(PY_SRC)/makeqstrdefs.py
+	$(STEPECHO) "GEN $@"
+	$(Q)$(PYTHON3) $(PY_SRC)/makeqstrdefs.py split $(HEADER_BUILD)/qstr.i.last $(HEADER_BUILD)/qstr $(QSTR_DEFS_COLLECTED)
 	$(Q)touch $@
 
-$(QSTR_DEFS_COLLECTED): $(HEADER_BUILD)/qstr.split
+$(QSTR_DEFS_COLLECTED): $(HEADER_BUILD)/qstr.split $(PY_SRC)/makeqstrdefs.py
 	$(STEPECHO) "GEN $@"
-	$(Q)$(PYTHON) $(PY_SRC)/makeqstrdefs.py cat $(HEADER_BUILD)/qstr.i.last $(HEADER_BUILD)/qstr $(QSTR_DEFS_COLLECTED)
+	$(Q)$(PYTHON3) $(PY_SRC)/makeqstrdefs.py cat $(HEADER_BUILD)/qstr.i.last $(HEADER_BUILD)/qstr $(QSTR_DEFS_COLLECTED)
 
 # $(sort $(var)) removes duplicates
 #
@@ -123,14 +125,14 @@ $(BUILD)/frozen_mpy: $(FROZEN_MPY_DIRS)
 	$(Q)$(PREPROCESS_FROZEN_MODULES) -o $@ $(FROZEN_MPY_DIRS)
 	$(Q)$(CD) $@ && \
 $(FIND) -L . -type f -name '*.py' | sed 's=^\./==' | \
-xargs -n1 $(abspath $(MPY_CROSS)) $(MPY_CROSS_FLAGS)
+xargs -n1 "$(abspath $(MPY_CROSS))" $(MPY_CROSS_FLAGS)
 
 # to build frozen_mpy.c from all .mpy files
 # You need to define MPY_TOOL_LONGINT_IMPL in mpconfigport.mk
 # if the default will not work (mpz is the default).
-$(BUILD)/frozen_mpy.c: $(BUILD)/frozen_mpy $(BUILD)/genhdr/qstrdefs.generated.h
+$(BUILD)/frozen_mpy.c: $(BUILD)/frozen_mpy $(BUILD)/genhdr/qstrdefs.generated.h $(TOP)/tools/mpy-tool.py
 	$(STEPECHO) "Creating $@"
-	$(Q)$(PYTHON) $(MPY_TOOL) $(MPY_TOOL_LONGINT_IMPL) -f -q $(BUILD)/genhdr/qstrdefs.preprocessed.h $(shell $(FIND) -L $(BUILD)/frozen_mpy -type f -name '*.mpy') > $@
+	$(Q)$(MPY_TOOL) $(MPY_TOOL_LONGINT_IMPL) -f -q $(BUILD)/genhdr/qstrdefs.preprocessed.h $(shell $(FIND) -L $(BUILD)/frozen_mpy -type f -name '*.mpy') > $@
 endif
 
 ifneq ($(PROG),)
@@ -143,7 +145,7 @@ $(PROG): $(OBJ)
 # Do not pass COPT here - it's *C* compiler optimizations. For example,
 # we may want to compile using Thumb, but link with non-Thumb libc.
 	$(Q)$(CC) -o $@ $^ $(LIB) $(LDFLAGS)
-ifndef DEBUG
+ifdef STRIP_CIRCUITPYTHON
 	$(Q)$(STRIP) $(STRIPFLAGS_EXTRA) $(PROG)
 endif
 	$(Q)$(SIZE) $$(find $(BUILD) -path "$(BUILD)/build/frozen*.o") $(PROG)
@@ -171,6 +173,27 @@ clean:
 	$(RM) -rf $(BUILD) $(CLEAN_EXTRA)
 .PHONY: clean
 
+# Clean every non-git file from FROZEN_DIR/FROZEN_MPY_DIR, but making a backup.
+# We run rmdir below to avoid empty backup dir (it will silently fail if backup
+# is non-empty).
+clean-frozen:
+	if [ -n "$(FROZEN_MPY_DIR)" ]; then \
+	backup_dir=$(FROZEN_MPY_DIR).$$(date +%Y%m%dT%H%M%S); mkdir $$backup_dir; \
+	cd $(FROZEN_MPY_DIR); git status --ignored -u all -s . | awk ' {print $$2}' \
+	| xargs --no-run-if-empty cp --parents -t ../$$backup_dir; \
+	rmdir ../$$backup_dir 2>/dev/null || true; \
+	git clean -d -f .; \
+	fi
+
+	if [ -n "$(FROZEN_DIR)" ]; then \
+	backup_dir=$(FROZEN_DIR).$$(date +%Y%m%dT%H%M%S); mkdir $$backup_dir; \
+	cd $(FROZEN_DIR); git status --ignored -u all -s . | awk ' {print $$2}' \
+	| xargs --no-run-if-empty cp --parents -t ../$$backup_dir; \
+	rmdir ../$$backup_dir 2>/dev/null || true; \
+	git clean -d -f .; \
+	fi
+.PHONY: clean-frozen
+
 print-cfg:
 	$(ECHO) "PY_SRC = $(PY_SRC)"
 	$(ECHO) "BUILD  = $(BUILD)"
@@ -187,4 +210,3 @@ tags:
 	ctags -e -R $(TOP)
 
 -include $(OBJ:.o=.P)
-

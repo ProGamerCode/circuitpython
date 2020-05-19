@@ -1,6 +1,8 @@
 #define MICROPY_HW_BOARD_NAME "Adafruit CircuitPlayground Express"
 #define MICROPY_HW_MCU_NAME "samd21g18"
 
+#define MICROPY_HW_LED_STATUS   (&pin_PA17)
+
 // Don't allow touch on A0 (PA02), because it's connected to the speaker.
 #define PA02_NO_TOUCH       (true)
 
@@ -8,49 +10,38 @@
 #define SPI_FLASH_BAUDRATE  (8000000)
 
 // On-board flash
-#define SPI_FLASH_MOSI_PIN          PIN_PA20
-#define SPI_FLASH_MISO_PIN          PIN_PA16
-#define SPI_FLASH_SCK_PIN           PIN_PA21
-#define SPI_FLASH_CS_PIN            PIN_PB22
-
-#define SPI_FLASH_MOSI_PIN_FUNCTION PINMUX_PA20D_SERCOM3_PAD2
-#define SPI_FLASH_MISO_PIN_FUNCTION PINMUX_PA16D_SERCOM3_PAD0
-#define SPI_FLASH_SCK_PIN_FUNCTION  PINMUX_PA21D_SERCOM3_PAD3
-#define SPI_FLASH_SERCOM            SERCOM3
-#define SPI_FLASH_SERCOM_INDEX      5
-#define SPI_FLASH_MOSI_PAD          2
-#define SPI_FLASH_MISO_PAD          0
-#define SPI_FLASH_SCK_PAD           3
-
-// <o> Transmit Data Pinout
-// <0x0=>PAD[0,1]_DO_SCK
-// <0x1=>PAD[2,3]_DO_SCK
-// <0x2=>PAD[3,1]_DO_SCK
-// <0x3=>PAD[0,3]_DO_SCK
-#define SPI_FLASH_DOPO              1
-#define SPI_FLASH_DIPO              0    // same as MISO PAD
+#define SPI_FLASH_MOSI_PIN          &pin_PA20
+#define SPI_FLASH_MISO_PIN          &pin_PA16
+#define SPI_FLASH_SCK_PIN           &pin_PA21
+#define SPI_FLASH_CS_PIN            &pin_PB22
 
 // These are pins not to reset.
-// PA24 and PA25 are USB.
-#define MICROPY_PORT_A        (PORT_PA16 | PORT_PA20 | PORT_PA21 | PORT_PA24 | PORT_PA25)
-#define MICROPY_PORT_B        (PORT_PB22)
+#define MICROPY_PORT_A        (0)
+#define MICROPY_PORT_B        (0)
 #define MICROPY_PORT_C        (0)
 
 #define SPEAKER_ENABLE_PIN    (&pin_PA30)
-
-#include "spi_flash.h"
-
-// If you change this, then make sure to update the linker scripts as well to
-// make sure you don't overwrite code.
-// #define CIRCUITPY_INTERNAL_NVM_SIZE 256
-#define CIRCUITPY_INTERNAL_NVM_SIZE 0
-
-#define BOARD_FLASH_SIZE (0x00040000 - 0x2000 - CIRCUITPY_INTERNAL_NVM_SIZE)
-
-#include "flash_S25FL216K.h"
-#include "flash_GD25Q16C.h"
 
 #define CALIBRATE_CRYSTALLESS 1
 
 // Explanation of how a user got into safe mode.
 #define BOARD_USER_SAFE_MODE_ACTION "pressing both buttons at start up"
+
+// Increase stack size slightly due to CPX library import nesting
+#define CIRCUITPY_DEFAULT_STACK_SIZE  (4760) //divisible by 8
+
+#define USER_NEOPIXELS_PIN      (&pin_PB23)
+
+#define DEFAULT_I2C_BUS_SCL (&pin_PB03)
+#define DEFAULT_I2C_BUS_SDA (&pin_PB02)
+
+#define DEFAULT_SPI_BUS_SCK (&pin_PA05)
+#define DEFAULT_SPI_BUS_MOSI (&pin_PA07)
+#define DEFAULT_SPI_BUS_MISO (&pin_PA06)
+
+#define DEFAULT_UART_BUS_RX (&pin_PB09)
+#define DEFAULT_UART_BUS_TX (&pin_PB08)
+
+// USB is always used internally so skip the pin objects for it.
+#define IGNORE_PIN_PA24     1
+#define IGNORE_PIN_PA25     1

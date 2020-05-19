@@ -3,7 +3,7 @@
  *
  * The MIT License (MIT)
  *
- * Copyright (c) 2017 Scott Shawcroft for Adafruit Industries
+ * Copyright (c) 2018 Dan Halbert for Adafruit Industries
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,19 +24,19 @@
  * THE SOFTWARE.
  */
 
-#ifndef MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_PULSEIO_PULSEOUT_H
-#define MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_PULSEIO_PULSEOUT_H
+#ifndef MICROPY_INCLUDED_NRF_COMMON_HAL_PULSEIO_PULSEOUT_H
+#define MICROPY_INCLUDED_NRF_COMMON_HAL_PULSEIO_PULSEOUT_H
 
 #include "common-hal/microcontroller/Pin.h"
+#include "common-hal/pulseio/PWMOut.h"
 
 #include "py/obj.h"
 
 typedef struct {
     mp_obj_base_t base;
-//    __IO PORT_PINCFG_Type *pincfg;
-    uint8_t pin;
+    const pulseio_pwmout_obj_t *pwmout;
 } pulseio_pulseout_obj_t;
 
 void pulseout_reset(void);
 
-#endif // MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_PULSEIO_PULSEOUT_H
+#endif // MICROPY_INCLUDED_NRF_COMMON_HAL_PULSEIO_PULSEOUT_H

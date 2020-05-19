@@ -31,6 +31,8 @@
 
 #include <stdbool.h>
 
+#include "py/mpconfig.h"
+
 // Initializes board related state once on start up.
 void board_init(void);
 

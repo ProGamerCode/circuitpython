@@ -32,32 +32,26 @@
 
 #include "py/objproperty.h"
 
-#include "py/objproperty.h"
 #include "py/runtime.h"
 
-//| .. currentmodule:: microcontroller
+//| class Processor:
+//|     """Microcontroller CPU information and control
 //|
-//| :class:`Processor` --- Microcontroller CPU information and control
-//| --------------------------------------------------------
+//|     Usage::
 //|
-//| Get information about the microcontroller CPU and control it.
-//|
-//| Usage::
-//|
-//|    import microcontroller
-//|    print(microcontroller.cpu.frequency)
-//|    print(microcontroller.cpu.temperature)
+//|        import microcontroller
+//|        print(microcontroller.cpu.frequency)
+//|        print(microcontroller.cpu.temperature)"""
 //|
 
-//| .. class:: Processor()
-//|
-//| You cannot create an instance of `microcontroller.Processor`.
-//| Use `microcontroller.cpu` to access the sole instance available.
+//|     def __init__(self, ):
+//|         """You cannot create an instance of `microcontroller.Processor`.
+//|         Use `microcontroller.cpu` to access the sole instance available."""
+//|         ...
 //|
 
-//| .. attribute:: frequency
-//|
-//|   Return the CPU operating frequency as an int, in Hz.
+//|     frequency: int = ...
+//|     """The CPU operating frequency in Hertz. (read-only)"""
 //|
 STATIC mp_obj_t mcu_processor_get_frequency(mp_obj_t self) {
     return mp_obj_new_int_from_uint(common_hal_mcu_processor_get_frequency());
@@ -73,10 +67,10 @@ const mp_obj_property_t mcu_processor_frequency_obj = {
     },
 };
 
-//| .. attribute:: temperature
+//|     temperature: Any = ...
+//|     """The on-chip temperature, in Celsius, as a float. (read-only)
 //|
-//|   Return the on-chip temperature, in Celsius, as a float.
-//|   If the temperature is not available, return `None`.
+//|     Is `None` if the temperature is not available."""
 //|
 STATIC mp_obj_t mcu_processor_get_temperature(mp_obj_t self) {
     float temperature = common_hal_mcu_processor_get_temperature();
@@ -93,9 +87,50 @@ const mp_obj_property_t mcu_processor_temperature_obj = {
     },
 };
 
+//|     uid: Any = ...
+//|     """The unique id (aka serial number) of the chip as a `bytearray`. (read-only)"""
+//|
+STATIC mp_obj_t mcu_processor_get_uid(mp_obj_t self) {
+    uint8_t raw_id[COMMON_HAL_MCU_PROCESSOR_UID_LENGTH];
+    common_hal_mcu_processor_get_uid(raw_id);
+    return mp_obj_new_bytearray(sizeof(raw_id), raw_id);
+}
+
+MP_DEFINE_CONST_FUN_OBJ_1(mcu_processor_get_uid_obj, mcu_processor_get_uid);
+
+const mp_obj_property_t mcu_processor_uid_obj = {
+    .base.type = &mp_type_property,
+    .proxy = {(mp_obj_t)&mcu_processor_get_uid_obj,  // getter
+        (mp_obj_t)&mp_const_none_obj,            // no setter
+        (mp_obj_t)&mp_const_none_obj,            // no deleter
+    },
+};
+
+//|     voltage: Any = ...
+//|     """The input voltage to the microcontroller, as a float. (read-only)
+//|
+//|     Is `None` if the voltage is not available."""
+//|
+STATIC mp_obj_t mcu_processor_get_voltage(mp_obj_t self) {
+    float voltage = common_hal_mcu_processor_get_voltage();
+    return isnan(voltage) ? mp_const_none : mp_obj_new_float(voltage);
+}
+
+MP_DEFINE_CONST_FUN_OBJ_1(mcu_processor_get_voltage_obj, mcu_processor_get_voltage);
+
+const mp_obj_property_t mcu_processor_voltage_obj = {
+    .base.type = &mp_type_property,
+    .proxy = {(mp_obj_t)&mcu_processor_get_voltage_obj,  // getter
+              (mp_obj_t)&mp_const_none_obj,            // no setter
+              (mp_obj_t)&mp_const_none_obj,            // no deleter
+    },
+};
+
 STATIC const mp_rom_map_elem_t mcu_processor_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_frequency), MP_ROM_PTR(&mcu_processor_frequency_obj) },
     { MP_ROM_QSTR(MP_QSTR_temperature), MP_ROM_PTR(&mcu_processor_temperature_obj) },
+    { MP_ROM_QSTR(MP_QSTR_uid), MP_ROM_PTR(&mcu_processor_uid_obj) },
+    { MP_ROM_QSTR(MP_QSTR_voltage), MP_ROM_PTR(&mcu_processor_voltage_obj) },
 };
 
 STATIC MP_DEFINE_CONST_DICT(mcu_processor_locals_dict, mcu_processor_locals_dict_table);

@@ -32,7 +32,12 @@
 #include "py/mperrno.h"
 #include "py/obj.h"
 #include "py/runtime.h"
+#include "shared-bindings/microcontroller/__init__.h"
+#include "shared-bindings/os/__init__.h"
 #include "shared-bindings/storage/__init__.h"
+#include "supervisor/filesystem.h"
+#include "supervisor/flash.h"
+#include "supervisor/usb.h"
 
 STATIC mp_obj_t mp_vfs_proxy_call(mp_vfs_mount_t *vfs, qstr meth_name, size_t n_args, const mp_obj_t *args) {
     if (vfs == MP_VFS_NONE) {
@@ -63,8 +68,17 @@ void common_hal_storage_mount(mp_obj_t vfs_obj, const char* mount_path, bool rea
     args[0] = readonly ? mp_const_true : mp_const_false;
     args[1] = mp_const_false; // Don't make the file system automatically when mounting.
 
-    // call the underlying object to do any mounting operation
-    mp_vfs_proxy_call(vfs, MP_QSTR_mount, 2, (mp_obj_t*)&args);
+    // Check that there's no file or directory with the same name as the mount point.
+    // But it's ok to mount '/' in any case.
+    if (strcmp(vfs->str, "/") != 0) {
+        nlr_buf_t nlr;
+        if (nlr_push(&nlr) == 0) {
+            common_hal_os_stat(mount_path);
+            nlr_pop();
+            // Something with the same name exists.
+            mp_raise_OSError(MP_EEXIST);
+        }
+    }
 
     // check that the destination mount point is unused
     const char *path_out;
@@ -77,6 +91,9 @@ void common_hal_storage_mount(mp_obj_t vfs_obj, const char* mount_path, bool rea
             mp_raise_OSError(MP_EPERM);
         }
     }
+
+    // call the underlying object to do any mounting operation
+    mp_vfs_proxy_call(vfs, MP_QSTR_mount, 2, (mp_obj_t*)&args);
 
     // Insert the vfs into the mount table by pushing it onto the front of the
     // mount table.
@@ -109,19 +126,40 @@ void common_hal_storage_umount_object(mp_obj_t vfs_obj) {
     mp_vfs_proxy_call(vfs, MP_QSTR_umount, 0, NULL);
 }
 
-void common_hal_storage_umount_path(const char* mount_path) {
-    // remove vfs from the mount table
-    mp_obj_t *vfs_obj = NULL;
+STATIC mp_obj_t storage_object_from_path(const char* mount_path) {
     for (mp_vfs_mount_t **vfsp = &MP_STATE_VM(vfs_mount_table); *vfsp != NULL; vfsp = &(*vfsp)->next) {
         if (strcmp(mount_path, (*vfsp)->str) == 0) {
-            vfs_obj = (*vfsp)->obj;
-            break;
+            return (*vfsp)->obj;
         }
     }
+    mp_raise_OSError(MP_EINVAL);
+}
 
-    if (vfs_obj == NULL) {
+void common_hal_storage_umount_path(const char* mount_path) {
+    common_hal_storage_umount_object(storage_object_from_path(mount_path));
+}
+
+mp_obj_t common_hal_storage_getmount(const char *mount_path) {
+    return storage_object_from_path(mount_path);
+}
+
+void common_hal_storage_remount(const char *mount_path, bool readonly, bool disable_concurrent_write_protection) {
+    if (strcmp(mount_path, "/") != 0) {
         mp_raise_OSError(MP_EINVAL);
     }
 
-    common_hal_storage_umount_object(vfs_obj);
+    #ifdef USB_AVAILABLE
+    if (!usb_msc_ejected()) {
+        mp_raise_RuntimeError(translate("Cannot remount '/' when USB is active."));
+    }
+    #endif
+
+    filesystem_set_internal_writable_by_usb(readonly);
+    filesystem_set_internal_concurrent_write_protection(!disable_concurrent_write_protection);
+}
+
+void common_hal_storage_erase_filesystem(void) {
+    filesystem_init(false, true); // Force a re-format.
+    common_hal_mcu_reset();
+    // We won't actually get here, since we're resetting.
 }

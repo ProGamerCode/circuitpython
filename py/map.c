@@ -33,6 +33,15 @@
 #include "py/misc.h"
 #include "py/runtime.h"
 
+#include "supervisor/linker.h"
+
+#if MICROPY_DEBUG_VERBOSE // print debugging info
+#define DEBUG_PRINT (1)
+#else // don't print debugging info
+#define DEBUG_PRINT (0)
+#define DEBUG_printf(...) (void)0
+#endif
+
 // Fixed empty map. Useful when need to call kw-receiving functions
 // without any keywords from C, etc.
 const mp_map_t mp_const_empty_map = {
@@ -114,6 +123,7 @@ void mp_map_clear(mp_map_t *map) {
 STATIC void mp_map_rehash(mp_map_t *map) {
     size_t old_alloc = map->alloc;
     size_t new_alloc = get_hash_alloc_greater_or_equal_to(map->alloc + 1);
+    DEBUG_printf("mp_map_rehash(%p): " UINT_FMT " -> " UINT_FMT "\n", map, old_alloc, new_alloc);
     mp_map_elem_t *old_table = map->table;
     mp_map_elem_t *new_table = m_new0(mp_map_elem_t, new_alloc);
     // If we reach this point, table resizing succeeded, now we can edit the old map.
@@ -135,7 +145,7 @@ STATIC void mp_map_rehash(mp_map_t *map) {
 //  - returns slot, with key non-null and value=MP_OBJ_NULL if it was added
 // MP_MAP_LOOKUP_REMOVE_IF_FOUND behaviour:
 //  - returns NULL if not found, else the slot if was found in with key null and value non-null
-mp_map_elem_t *mp_map_lookup(mp_map_t *map, mp_obj_t index, mp_map_lookup_kind_t lookup_kind) {
+mp_map_elem_t *PLACE_IN_ITCM(mp_map_lookup)(mp_map_t *map, mp_obj_t index, mp_map_lookup_kind_t lookup_kind) {
     // If the map is a fixed array then we must only be called for a lookup
     assert(!map->is_fixed || lookup_kind == MP_MAP_LOOKUP);
 
@@ -162,6 +172,7 @@ mp_map_elem_t *mp_map_lookup(mp_map_t *map, mp_obj_t index, mp_map_lookup_kind_t
     if (map->is_ordered) {
         for (mp_map_elem_t *elem = &map->table[0], *top = &map->table[map->used]; elem < top; elem++) {
             if (elem->key == index || (!compare_only_ptrs && mp_obj_equal(elem->key, index))) {
+                #if MICROPY_PY_COLLECTIONS_ORDEREDDICT
                 if (MP_UNLIKELY(lookup_kind == MP_MAP_LOOKUP_REMOVE_IF_FOUND)) {
                     // remove the found element by moving the rest of the array down
                     mp_obj_t value = elem->value;
@@ -172,9 +183,11 @@ mp_map_elem_t *mp_map_lookup(mp_map_t *map, mp_obj_t index, mp_map_lookup_kind_t
                     elem->key = MP_OBJ_NULL;
                     elem->value = value;
                 }
+                #endif
                 return elem;
             }
         }
+        #if MICROPY_PY_COLLECTIONS_ORDEREDDICT
         if (MP_LIKELY(lookup_kind != MP_MAP_LOOKUP_ADD_IF_NOT_FOUND)) {
             return NULL;
         }
@@ -190,6 +203,9 @@ mp_map_elem_t *mp_map_lookup(mp_map_t *map, mp_obj_t index, mp_map_lookup_kind_t
             map->all_keys_are_qstrs = 0;
         }
         return elem;
+        #else
+        return NULL;
+        #endif
     }
 
     // map is a hash table (not an ordered array), so do a hash lookup

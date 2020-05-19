@@ -33,9 +33,10 @@
 #include "py/runtime.h"
 #include "py/repl.h"
 #include "py/gc.h"
+#include "py/gc_long_lived.h"
 #include "py/frozenmod.h"
 #include "py/mphal.h"
-#if defined(USE_DEVICE_MODE)
+#if MICROPY_HW_ENABLE_USB
 #include "irq.h"
 #include "usb.h"
 #endif
@@ -88,11 +89,23 @@ STATIC int parse_compile_execute(const void *source, mp_parse_input_kind_t input
             }
             // source is a lexer, parse and compile the script
             qstr source_name = lex->source_name;
+            if (input_kind == MP_PARSE_FILE_INPUT) {
+                mp_store_global(MP_QSTR___file__, MP_OBJ_NEW_QSTR(source_name));
+            }
             mp_parse_tree_t parse_tree = mp_parse(lex, input_kind);
             module_fun = mp_compile(&parse_tree, source_name, MP_EMIT_OPT_NONE, exec_flags & EXEC_FLAG_IS_REPL);
+            // Clear the parse tree because it has a heap pointer we don't need anymore.
+            *((uint32_t volatile*) &parse_tree.chunk) = 0;
             #else
-            mp_raise_msg(&mp_type_RuntimeError, "script compilation not supported");
+            mp_raise_msg(&mp_type_RuntimeError, translate("script compilation not supported"));
             #endif
+        }
+
+        // If the code was loaded from a file its likely to be running for a while so we'll long
+        // live it and collect any garbage before running.
+        if (input_kind == MP_PARSE_FILE_INPUT) {
+            module_fun = make_obj_long_lived(module_fun, 6);
+            gc_collect();
         }
 
         // execute code
@@ -118,7 +131,9 @@ STATIC int parse_compile_execute(const void *source, mp_parse_input_kind_t input
             // at the moment, the value of SystemExit is unused
             ret = pyexec_system_exit;
         } else {
-            mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+            if ((mp_obj_t) nlr.ret_val != MP_OBJ_FROM_PTR(&MP_STATE_VM(mp_reload_exception))) {
+                mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+            }
             ret = PYEXEC_EXCEPTION;
         }
     }
@@ -421,7 +436,7 @@ friendly_repl_reset:
     for (;;) {
     input_restart:
 
-        #if defined(USE_DEVICE_MODE)
+        #if MICROPY_HW_ENABLE_USB
         if (usb_vcp_is_enabled()) {
             // If the user gets to here and interrupts are disabled then
             // they'll never see the prompt, traceback etc. The USB REPL needs

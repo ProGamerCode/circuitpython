@@ -28,21 +28,22 @@
 
 #include <stdint.h>
 
-#include "asf/sam0/drivers/tc/tc_interrupt.h"
-#include "asf/sam0/drivers/port/port.h"
+#include "hal/include/hal_gpio.h"
 
 #include "mpconfigport.h"
+#include "samd/pins.h"
+#include "samd/timers.h"
 #include "py/gc.h"
 #include "py/runtime.h"
-#include "samd21_pins.h"
 #include "shared-bindings/pulseio/PulseOut.h"
-
-#undef ENABLE
+#include "supervisor/shared/translate.h"
+#include "timer_handler.h"
 
 // This timer is shared amongst all PulseOut objects under the assumption that
-// the code is single threaded. Its stored in MICROPY_PORT_ROOT_POINTERS so it
-// doesn't get garbage collected.
+// the code is single threaded.
 static uint8_t refcount = 0;
+
+static uint8_t pulseout_tc_index = 0xff;
 
 static __IO PORT_PINCFG_Type *active_pincfg = NULL;
 static uint16_t *pulse_buffer = NULL;
@@ -58,7 +59,7 @@ static void turn_off(__IO PORT_PINCFG_Type * pincfg) {
     pincfg->reg = PORT_PINCFG_RESETVALUE;
 }
 
-void pulse_finish(struct tc_module *const module) {
+void pulse_finish(void) {
     pulse_index++;
 
     if (active_pincfg == NULL) {
@@ -70,15 +71,27 @@ void pulse_finish(struct tc_module *const module) {
         return;
     }
     current_compare = (current_compare + pulse_buffer[pulse_index] * 3 / 4) & 0xffff;
-    tc_set_compare_value(MP_STATE_VM(pulseout_tc_instance), TC_COMPARE_CAPTURE_CHANNEL_0, current_compare);
+    Tc* tc = tc_insts[pulseout_tc_index];
+    tc->COUNT16.CC[0].reg = current_compare;
     if (pulse_index % 2 == 0) {
         turn_on(active_pincfg);
     }
 }
 
+void pulseout_interrupt_handler(uint8_t index) {
+    if (index != pulseout_tc_index) return;
+    Tc* tc = tc_insts[index];
+    if (!tc->COUNT16.INTFLAG.bit.MC0) return;
+
+    pulse_finish();
+
+    // Clear the interrupt bit.
+    tc->COUNT16.INTFLAG.reg = TC_INTFLAG_MC0;
+}
+
 void pulseout_reset() {
     refcount = 0;
-    MP_STATE_VM(pulseout_tc_instance) = NULL;
+    pulseout_tc_index = 0xff;
     active_pincfg = NULL;
 }
 
@@ -86,39 +99,51 @@ void common_hal_pulseio_pulseout_construct(pulseio_pulseout_obj_t* self,
                                             const pulseio_pwmout_obj_t* carrier) {
     if (refcount == 0) {
         // Find a spare timer.
-        Tc *t = NULL;
-        Tc *tcs[TC_INST_NUM] = TC_INSTS;
-        for (uint8_t i = TC_INST_NUM; i > 0; i--) {
-            if (tcs[i - 1]->COUNT16.CTRLA.bit.ENABLE == 0) {
-                t = tcs[i - 1];
+        Tc *tc = NULL;
+        int8_t index = TC_INST_NUM - 1;
+        for (; index >= 0; index--) {
+            if (tc_insts[index]->COUNT16.CTRLA.bit.ENABLE == 0) {
+                tc = tc_insts[index];
                 break;
             }
         }
-        if (t == NULL) {
-            mp_raise_RuntimeError("All timers in use");
-        }
-        MP_STATE_VM(pulseout_tc_instance) = gc_alloc(sizeof(struct tc_module), false);
-        if (t == NULL) {
-            mp_raise_msg(&mp_type_MemoryError, "");
+        if (tc == NULL) {
+            mp_raise_RuntimeError(translate("All timers in use"));
         }
 
-        struct tc_config config_tc;
-        tc_get_config_defaults(&config_tc);
+        pulseout_tc_index = index;
 
-        config_tc.counter_size    = TC_COUNTER_SIZE_16BIT;
-        config_tc.clock_prescaler = TC_CTRLA_PRESCALER_DIV64;
-        config_tc.wave_generation = TC_WAVE_GENERATION_NORMAL_FREQ;
+        set_timer_handler(true, index, TC_HANDLER_PULSEOUT);
+        // We use GCLK0 for SAMD21 and GCLK1 for SAMD51 because they both run at 48mhz making our
+        // math the same across the boards.
+        #ifdef SAMD21
+        turn_on_clocks(true, index, 0);
+        #endif
+        #ifdef SAMD51
+        turn_on_clocks(true, index, 1);
+        #endif
 
-        tc_init(MP_STATE_VM(pulseout_tc_instance), t, &config_tc);
-        tc_register_callback(MP_STATE_VM(pulseout_tc_instance), pulse_finish, TC_CALLBACK_CC_CHANNEL0);
-        tc_enable(MP_STATE_VM(pulseout_tc_instance));
-        tc_stop_counter(MP_STATE_VM(pulseout_tc_instance));
+
+        #ifdef SAMD21
+        tc->COUNT16.CTRLA.reg = TC_CTRLA_MODE_COUNT16 |
+                                TC_CTRLA_PRESCALER_DIV64 |
+                                TC_CTRLA_WAVEGEN_NFRQ;
+        #endif
+        #ifdef SAMD51
+        tc_reset(tc);
+        tc_set_enable(tc, false);
+        tc->COUNT16.CTRLA.reg = TC_CTRLA_MODE_COUNT16 | TC_CTRLA_PRESCALER_DIV64;
+        tc->COUNT16.WAVE.reg = TC_WAVE_WAVEGEN_NFRQ;
+        #endif
+
+        tc_set_enable(tc, true);
+        tc->COUNT16.CTRLBSET.reg = TC_CTRLBSET_CMD_STOP;
     }
     refcount++;
 
-    self->pin = carrier->pin->pin;
+    self->pin = carrier->pin->number;
 
-    PortGroup *const port_base = port_get_group_from_gpio_pin(self->pin);
+    PortGroup *const port_base = &PORT->Group[GPIO_PORT(self->pin)];
     self->pincfg = &port_base->PINCFG[self->pin % 32];
 
     // Set the port to output a zero.
@@ -137,23 +162,22 @@ void common_hal_pulseio_pulseout_deinit(pulseio_pulseout_obj_t* self) {
     if (common_hal_pulseio_pulseout_deinited(self)) {
         return;
     }
-    PortGroup *const port_base = port_get_group_from_gpio_pin(self->pin);
+    PortGroup *const port_base = &PORT->Group[GPIO_PORT(self->pin)];
     port_base->DIRCLR.reg = 1 << (self->pin % 32);
 
     turn_on(self->pincfg);
 
     refcount--;
     if (refcount == 0) {
-        tc_reset(MP_STATE_VM(pulseout_tc_instance));
-        gc_free(MP_STATE_VM(pulseout_tc_instance));
-        MP_STATE_VM(pulseout_tc_instance) = NULL;
+        tc_reset(tc_insts[pulseout_tc_index]);
+        pulseout_tc_index = 0xff;
     }
     self->pin = NO_PIN;
 }
 
 void common_hal_pulseio_pulseout_send(pulseio_pulseout_obj_t* self, uint16_t* pulses, uint16_t length) {
     if (active_pincfg != NULL) {
-        mp_raise_RuntimeError("Another send is already active");
+        mp_raise_RuntimeError(translate("Another send is already active"));
     }
     active_pincfg = self->pincfg;
     pulse_buffer = pulses;
@@ -161,21 +185,24 @@ void common_hal_pulseio_pulseout_send(pulseio_pulseout_obj_t* self, uint16_t* pu
     pulse_length = length;
 
     current_compare = pulses[0] * 3 / 4;
-    tc_set_compare_value(MP_STATE_VM(pulseout_tc_instance), TC_COMPARE_CAPTURE_CHANNEL_0, current_compare);
+    Tc* tc = tc_insts[pulseout_tc_index];
+    tc->COUNT16.CC[0].reg = current_compare;
 
-    tc_enable_callback(MP_STATE_VM(pulseout_tc_instance), TC_CALLBACK_CC_CHANNEL0);
+    // Clear our interrupt in case it was set earlier
+    tc->COUNT16.INTFLAG.reg = TC_INTFLAG_MC0;
+    tc->COUNT16.INTENSET.reg = TC_INTENSET_MC0;
+    tc_enable_interrupts(pulseout_tc_index);
     turn_on(active_pincfg);
-    tc_start_counter(MP_STATE_VM(pulseout_tc_instance));
+    tc->COUNT16.CTRLBSET.reg = TC_CTRLBSET_CMD_RETRIGGER;
 
     while(pulse_index < length) {
         // Do other things while we wait. The interrupts will handle sending the
         // signal.
-        #ifdef MICROPY_VM_HOOK_LOOP
-            MICROPY_VM_HOOK_LOOP
-        #endif
+        RUN_BACKGROUND_TASKS;
     }
 
-    tc_stop_counter(MP_STATE_VM(pulseout_tc_instance));
-    tc_disable_callback(MP_STATE_VM(pulseout_tc_instance), TC_CALLBACK_CC_CHANNEL0);
+    tc->COUNT16.CTRLBSET.reg = TC_CTRLBSET_CMD_STOP;
+    tc->COUNT16.INTENCLR.reg = TC_INTENCLR_MC0;
+    tc_disable_interrupts(pulseout_tc_index);
     active_pincfg = NULL;
 }

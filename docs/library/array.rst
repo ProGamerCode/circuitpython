@@ -4,7 +4,7 @@
 .. module:: array
    :synopsis: efficient arrays of numeric data
 
-|see_cpython_module| :mod:`python:array`.
+|see_cpython_module| :mod:`cpython:array`.
 
 Supported format codes: ``b``, ``B``, ``h``, ``H``, ``i``, ``I``, ``l``,
 ``L``, ``q``, ``Q``, ``f``, ``d`` (the latter 2 depending on the
@@ -21,9 +21,9 @@ Classes
 
     .. method:: append(val)
 
-        Append new element to the end of array, growing it.
+        Append new element ``val`` to the end of array, growing it.
 
     .. method:: extend(iterable)
 
-        Append new elements as contained in an iterable to the end of
+        Append new elements as contained in `iterable` to the end of
         array, growing it.

@@ -28,10 +28,8 @@
 
 #include "boards/board.h"
 #include "common-hal/microcontroller/Pin.h"
+#include "supervisor/shared/board.h"
 #include "hal/include/hal_gpio.h"
-#include "shared-bindings/digitalio/DigitalInOut.h"
-#include "shared-bindings/neopixel_write/__init__.h"
-#include "samd21_pins.h"
 
 void board_init(void)
 {
@@ -49,18 +47,11 @@ bool board_requests_safe_mode(void) {
     gpio_set_pin_pull_mode(PIN_PA28, GPIO_PULL_DOWN);
     bool safe_mode = gpio_get_pin_level(PIN_PA14) &&
         gpio_get_pin_level(PIN_PA28);
-    reset_pin(PIN_PA14);
-    reset_pin(PIN_PA28);
+    reset_pin_number(PIN_PA14);
+    reset_pin_number(PIN_PA28);
     return safe_mode;
 }
 
 void reset_board(void) {
-    uint8_t empty[30];
-    memset(empty, 0, 30);
-    digitalio_digitalinout_obj_t neopixel_pin;
-    common_hal_digitalio_digitalinout_construct(&neopixel_pin, &pin_PB23);
-    common_hal_digitalio_digitalinout_switch_to_output(&neopixel_pin, false,
-        DRIVE_MODE_PUSH_PULL);
-    common_hal_neopixel_write(&neopixel_pin, empty, 30);
-    common_hal_digitalio_digitalinout_deinit(&neopixel_pin);
+    board_reset_user_neopixels();
 }

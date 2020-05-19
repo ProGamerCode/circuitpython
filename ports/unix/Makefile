@@ -74,7 +74,7 @@ else
 # Use gcc syntax for map file
 LDFLAGS_ARCH = -Wl,-Map=$@.map,--cref -Wl,--gc-sections
 endif
-LDFLAGS = $(LDFLAGS_MOD) $(LDFLAGS_ARCH) -lm $(LDFLAGS_EXTRA)
+LDFLAGS = -Lbuild $(LDFLAGS_MOD) $(LDFLAGS_ARCH) -lm $(LDFLAGS_EXTRA)
 
 ifeq ($(MICROPY_FORCE_32BIT),1)
 # Note: you may need to install i386 versions of dependency packages,
@@ -149,7 +149,20 @@ SRC_C = \
 	alloc.c \
 	coverage.c \
 	fatfs_port.c \
+	supervisor/stub/filesystem.c \
+	supervisor/stub/safe_mode.c \
+	supervisor/stub/serial.c \
+	supervisor/stub/stack.c \
+	supervisor/shared/translate.c \
 	$(SRC_MOD)
+
+PY_EXTMOD_O_BASENAME += \
+	extmod/machine_mem.o \
+	extmod/machine_pinbase.o \
+	extmod/machine_signal.o \
+	extmod/machine_pulse.o \
+	extmod/machine_i2c.o \
+	extmod/machine_spi.o
 
 LIB_SRC_C = $(addprefix lib/,\
 	$(LIB_SRC_C_EXTRA) \
@@ -165,7 +178,6 @@ LIB_SRC_C += $(addprefix lib/,\
 OBJ = $(PY_O)
 OBJ += $(addprefix $(BUILD)/, $(SRC_C:.c=.o))
 OBJ += $(addprefix $(BUILD)/, $(LIB_SRC_C:.c=.o))
-OBJ += $(addprefix $(BUILD)/, $(STMHAL_SRC_C:.c=.o))
 
 # List of sources for qstr extraction
 SRC_QSTR += $(SRC_C) $(LIB_SRC_C)
@@ -189,7 +201,7 @@ include $(TOP)/py/mkrules.mk
 
 test: $(PROG) $(TOP)/tests/run-tests
 	$(eval DIRNAME=ports/$(notdir $(CURDIR)))
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/$(PROG) ./run-tests
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/$(PROG) ./run-tests --auto-jobs
 
 # install micropython in /usr/local/bin
 TARGET = micropython
@@ -242,10 +254,10 @@ freedos:
 
 # build an interpreter for coverage testing and do the testing
 coverage:
-	$(MAKE) V=2 \
-	    COPT="-O0" CFLAGS_EXTRA='-DMP_CONFIGFILE="\"mpconfigport_coverage.h\"" \
+	$(MAKE) \
+	    COPT="-O0" CFLAGS_EXTRA='$(CFLAGS_EXTRA) -DMP_CONFIGFILE="<mpconfigport_coverage.h>" \
 	    -fprofile-arcs -ftest-coverage \
-	    -Wdouble-promotion -Wformat -Wmissing-declarations -Wmissing-prototypes -Wsign-compare \
+	    -Wformat -Wmissing-declarations -Wmissing-prototypes -Wsign-compare \
 	    -Wold-style-definition -Wpointer-arith -Wshadow -Wuninitialized -Wunused-parameter \
 	    -DMICROPY_UNIX_COVERAGE' \
 	    LDFLAGS_EXTRA='-fprofile-arcs -ftest-coverage' \
@@ -254,12 +266,28 @@ coverage:
 
 coverage_test: coverage
 	$(eval DIRNAME=ports/$(notdir $(CURDIR)))
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/micropython_coverage ./run-tests
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/micropython_coverage ./run-tests -d thread
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/micropython_coverage ./run-tests --emit native
-	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/micropython_coverage ./run-tests --via-mpy -d basics float
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/micropython_coverage ./run-tests --auto-jobs
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/micropython_coverage ./run-tests --auto-jobs -d thread
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/micropython_coverage ./run-tests --auto-jobs --emit native
+	cd $(TOP)/tests && MICROPY_MICROPYTHON=../$(DIRNAME)/micropython_coverage ./run-tests -j1 --via-mpy -d basics float
+	cat $(TOP)/tests/basics/0prelim.py | ./micropython_coverage | grep -q 'abc'
 	gcov -o build-coverage/py $(TOP)/py/*.c
 	gcov -o build-coverage/extmod $(TOP)/extmod/*.c
+
+coverage_clean:
+	$(MAKE) V=2 BUILD=build-coverage PROG=micropython_coverage clean
+
+# build an interpreter for fuzzing
+fuzz:
+	$(MAKE) \
+	    CC=afl-clang-fast DEBUG=1 \
+	    CFLAGS_EXTRA='$(CFLAGS_EXTRA) -ffunction-sections' \
+	    LDFLAGS_EXTRA='$(LDFLAGS_EXTRA)' \
+	    BUILD=build-fuzz PROG=micropython_fuzz
+
+fuzz_clean:
+	$(MAKE) V=2 BUILD=build-fuzz PROG=micropython_fuzz clean
+
 
 # Value of configure's --host= option (required for cross-compilation).
 # Deduce it from CROSS_COMPILE by default, but can be overridden.

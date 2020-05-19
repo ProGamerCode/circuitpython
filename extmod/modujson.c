@@ -32,7 +32,17 @@
 #include "py/runtime.h"
 #include "py/stream.h"
 
+#include "supervisor/shared/translate.h"
+
 #if MICROPY_PY_UJSON
+
+STATIC mp_obj_t mod_ujson_dump(mp_obj_t obj, mp_obj_t stream) {
+    mp_get_stream_raise(stream, MP_STREAM_OP_WRITE);
+    mp_print_t print = {MP_OBJ_TO_PTR(stream), mp_stream_write_adaptor};
+    mp_obj_print_helper(&print, obj, PRINT_JSON);
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_2(mod_ujson_dump_obj, mod_ujson_dump);
 
 STATIC mp_obj_t mod_ujson_dumps(mp_obj_t obj) {
     vstr_t vstr;
@@ -42,6 +52,10 @@ STATIC mp_obj_t mod_ujson_dumps(mp_obj_t obj) {
     return mp_obj_new_str_from_vstr(&mp_type_str, &vstr);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(mod_ujson_dumps_obj, mod_ujson_dumps);
+
+#define JSON_DEBUG(...) (void)0
+// #define JSON_DEBUG(...) mp_printf(&mp_plat_print __VA_OPT__(,) __VA_ARGS__)
+
 
 // The function below implements a simple non-recursive JSON parser.
 //
@@ -70,6 +84,7 @@ typedef struct _ujson_stream_t {
 
 STATIC byte ujson_stream_next(ujson_stream_t *s) {
     mp_uint_t ret = s->read(s->stream_obj, &s->cur, 1, &s->errcode);
+    JSON_DEBUG("  usjon_stream_next err:%2d cur: %c \n", s->errcode, s->cur);
     if (s->errcode != 0) {
         mp_raise_OSError(s->errcode);
     }
@@ -79,9 +94,10 @@ STATIC byte ujson_stream_next(ujson_stream_t *s) {
     return s->cur;
 }
 
-STATIC mp_obj_t mod_ujson_load(mp_obj_t stream_obj) {
+STATIC mp_obj_t _mod_ujson_load(mp_obj_t stream_obj, bool return_first_json) {
     const mp_stream_p_t *stream_p = mp_get_stream_raise(stream_obj, MP_STREAM_OP_READ);
     ujson_stream_t s = {stream_obj, stream_p->read, 0, 0};
+    JSON_DEBUG("got JSON stream\n");
     vstr_t vstr;
     vstr_init(&vstr, 8);
     mp_obj_list_t stack; // we use a list as a simple stack for nested JSON
@@ -166,7 +182,7 @@ STATIC mp_obj_t mod_ujson_load(mp_obj_t stream_obj) {
                     goto fail;
                 }
                 S_NEXT(s);
-                next = mp_obj_new_str(vstr.buf, vstr.len, false);
+                next = mp_obj_new_str(vstr.buf, vstr.len);
                 break;
             case '-':
             case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9': {
@@ -252,13 +268,18 @@ STATIC mp_obj_t mod_ujson_load(mp_obj_t stream_obj) {
         }
     }
     success:
-    // eat trailing whitespace
-    while (unichar_isspace(S_CUR(s))) {
-        S_NEXT(s);
-    }
-    if (!S_END(s)) {
-        // unexpected chars
-        goto fail;
+    // It is legal for a stream to have contents after JSON.
+    // E.g., A UART is not closed after receiving an object; in load() we will
+    //   return the first complete JSON object, while in loads() we will retain
+    //   strict adherence to the buffer's complete semantic.
+    if (!return_first_json) {
+        while (unichar_isspace(S_CUR(s))) {
+            S_NEXT(s);
+        }
+        if (!S_END(s)) {
+            // unexpected chars
+            goto fail;
+        }
     }
     if (stack_top == MP_OBJ_NULL || stack.len != 0) {
         // not exactly 1 object
@@ -268,7 +289,11 @@ STATIC mp_obj_t mod_ujson_load(mp_obj_t stream_obj) {
     return stack_top;
 
     fail:
-    mp_raise_ValueError("syntax error in JSON");
+    mp_raise_ValueError(translate("syntax error in JSON"));
+}
+
+STATIC mp_obj_t mod_ujson_load(mp_obj_t stream_obj) {
+    return _mod_ujson_load(stream_obj, true);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(mod_ujson_load_obj, mod_ujson_load);
 
@@ -277,12 +302,17 @@ STATIC mp_obj_t mod_ujson_loads(mp_obj_t obj) {
     const char *buf = mp_obj_str_get_data(obj, &len);
     vstr_t vstr = {len, len, (char*)buf, true};
     mp_obj_stringio_t sio = {{&mp_type_stringio}, &vstr, 0, MP_OBJ_NULL};
-    return mod_ujson_load(MP_OBJ_FROM_PTR(&sio));
+    return _mod_ujson_load(MP_OBJ_FROM_PTR(&sio), false);
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(mod_ujson_loads_obj, mod_ujson_loads);
 
 STATIC const mp_rom_map_elem_t mp_module_ujson_globals_table[] = {
+#if CIRCUITPY
+    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_json) },
+#else
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_ujson) },
+#endif
+    { MP_ROM_QSTR(MP_QSTR_dump), MP_ROM_PTR(&mod_ujson_dump_obj) },
     { MP_ROM_QSTR(MP_QSTR_dumps), MP_ROM_PTR(&mod_ujson_dumps_obj) },
     { MP_ROM_QSTR(MP_QSTR_load), MP_ROM_PTR(&mod_ujson_load_obj) },
     { MP_ROM_QSTR(MP_QSTR_loads), MP_ROM_PTR(&mod_ujson_loads_obj) },

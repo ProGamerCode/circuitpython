@@ -1,7 +1,18 @@
-// The clock tree starts with 48mhz DFLL48M based on USB. GCLK5 divides it down
-// to 2mhz which DPLL0 boosts to 120mhz. This is then used by GCLK0 to clock the
-// core and main bus. GCLK1 is 48mhz based on DFLL48M which is used for USB.
-// GCLK4 also outputs the 120mhz clock for monitoring.
+// Circuit Python SAMD51 clock tree:
+// DFLL48M (with USBCRM on to sync with external USB ref) -> GCLK1, GCLK5, GCLK6
+//   GCLK1 (48MHz) -> 48 MHz peripherals
+//   GCLK5 (48 MHz divided down to 2 MHz) -> DPLL0
+//     DPLL0 (multiplied up to 120 MHz) -> GCLK0, GCLK4 (output for monitoring)
+//   GCLK6 (48 MHz divided down to 12 MHz) -> DAC
+
+// We'd like to use XOSC32K as a ref for DFLL48M on boards with a 32kHz crystal,
+// but haven't figured that out yet.
+
+// Used in hpl/core/hpl_init.c to define which clocks should be initialized first.
+// Not clear why all these need to be specified, but it doesn't work properly otherwise.
+
+//#define CIRCUITPY_GCLK_INIT_1ST (1 << 0 | 1 << 1 | 1 << 3 | 1 <<5)
+#define CIRCUITPY_GCLK_INIT_1ST 0xffff
 
 /* Auto-generated config file hpl_gclk_config.h */
 #ifndef HPL_GCLK_CONFIG_H
@@ -162,7 +173,7 @@
 // <i> Indicates whether generic clock 2 configuration is enabled or not
 // <id> enable_gclk_gen_2
 #ifndef CONF_GCLK_GENERATOR_2_CONFIG
-#define CONF_GCLK_GENERATOR_2_CONFIG 0
+#define CONF_GCLK_GENERATOR_2_CONFIG 1
 #endif
 
 // <h> Generic Clock Generator Control
@@ -178,7 +189,7 @@
 // <i> This defines the clock source for generic clock generator 2
 // <id> gclk_gen_2_oscillator
 #ifndef CONF_GCLK_GEN_2_SOURCE
-#define CONF_GCLK_GEN_2_SOURCE GCLK_GENCTRL_SRC_XOSC1
+#define CONF_GCLK_GEN_2_SOURCE GCLK_GENCTRL_SRC_OSCULP32K
 #endif
 
 // <q> Run in Standby
@@ -220,7 +231,7 @@
 // <i> Indicates whether Generic Clock Generator Enable is enabled or not
 // <id> gclk_arch_gen_2_enable
 #ifndef CONF_GCLK_GEN_2_GENEN
-#define CONF_GCLK_GEN_2_GENEN 0
+#define CONF_GCLK_GEN_2_GENEN 1
 #endif
 // </h>
 
@@ -228,7 +239,7 @@
 //<o> Generic clock generator 2 division <0x0000-0xFFFF>
 // <id> gclk_gen_2_div
 #ifndef CONF_GCLK_GEN_2_DIV
-#define CONF_GCLK_GEN_2_DIV 1
+#define CONF_GCLK_GEN_2_DIV 4
 #endif
 // </h>
 // </e>
@@ -462,7 +473,7 @@
 // <i> Indicates whether generic clock 6 configuration is enabled or not
 // <id> enable_gclk_gen_6
 #ifndef CONF_GCLK_GENERATOR_6_CONFIG
-#define CONF_GCLK_GENERATOR_6_CONFIG 0
+#define CONF_GCLK_GENERATOR_6_CONFIG 1
 #endif
 
 // <h> Generic Clock Generator Control
@@ -478,7 +489,7 @@
 // <i> This defines the clock source for generic clock generator 6
 // <id> gclk_gen_6_oscillator
 #ifndef CONF_GCLK_GEN_6_SOURCE
-#define CONF_GCLK_GEN_6_SOURCE GCLK_GENCTRL_SRC_XOSC1
+#define CONF_GCLK_GEN_6_SOURCE GCLK_GENCTRL_SRC_DFLL
 #endif
 
 // <q> Run in Standby
@@ -513,14 +524,14 @@
 // <i> Indicates whether Improve Duty Cycle is enabled or not
 // <id> gclk_arch_gen_6_idc
 #ifndef CONF_GCLK_GEN_6_IDC
-#define CONF_GCLK_GEN_6_IDC 0
+#define CONF_GCLK_GEN_6_IDC 1
 #endif
 
 // <q> Generic Clock Generator Enable
 // <i> Indicates whether Generic Clock Generator Enable is enabled or not
 // <id> gclk_arch_gen_6_enable
 #ifndef CONF_GCLK_GEN_6_GENEN
-#define CONF_GCLK_GEN_6_GENEN 0
+#define CONF_GCLK_GEN_6_GENEN 1
 #endif
 // </h>
 
@@ -528,7 +539,7 @@
 //<o> Generic clock generator 6 division <0x0000-0xFFFF>
 // <id> gclk_gen_6_div
 #ifndef CONF_GCLK_GEN_6_DIV
-#define CONF_GCLK_GEN_6_DIV 1
+#define CONF_GCLK_GEN_6_DIV 4
 #endif
 // </h>
 // </e>

@@ -28,22 +28,20 @@
 #define MICROPY_INCLUDED_ATMEL_SAMD_COMMON_HAL_AUDIOBUSIO_AUDIOOUT_H
 
 #include "common-hal/microcontroller/Pin.h"
-#include "asf/sam0/drivers/i2s/i2s.h"
-#include "asf/sam0/drivers/tc/tc.h"
 
-#include "extmod/vfs_fat_file.h"
+#include "extmod/vfs_fat.h"
 #include "py/obj.h"
 
 typedef struct {
     mp_obj_base_t base;
     const mcu_pin_obj_t *clock_pin;
     const mcu_pin_obj_t *data_pin;
-    uint32_t frequency;
-    struct i2s_module i2s_instance;
+    uint32_t sample_rate;
     uint8_t serializer;
     uint8_t clock_unit;
     uint8_t bytes_per_sample;
     uint8_t bit_depth;
+    uint8_t gclk;
 } audiobusio_pdmin_obj_t;
 
 void pdmin_reset(void);

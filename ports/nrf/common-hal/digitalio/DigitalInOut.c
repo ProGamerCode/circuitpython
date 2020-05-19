@@ -24,146 +24,135 @@
  * THE SOFTWARE.
  */
 
-#include <stdint.h>
-#include <string.h>
-
-#include "py/runtime.h"
-#include "py/mphal.h"
-
-#include "hal/hal_gpio.h"
-
-#include "common-hal/microcontroller/Pin.h"
 #include "shared-bindings/digitalio/DigitalInOut.h"
+#include "py/runtime.h"
+#include "supervisor/shared/translate.h"
+
+#include "nrf_gpio.h"
+
+void common_hal_digitalio_digitalinout_never_reset(
+        digitalio_digitalinout_obj_t *self) {
+    never_reset_pin_number(self->pin->number);
+}
 
 digitalinout_result_t common_hal_digitalio_digitalinout_construct(
-        digitalio_digitalinout_obj_t* self, const mcu_pin_obj_t* pin) {
+        digitalio_digitalinout_obj_t *self, const mcu_pin_obj_t *pin) {
+    claim_pin(pin);
     self->pin = pin;
-    hal_gpio_cfg_pin(pin->port, pin->pin, HAL_GPIO_MODE_INPUT, HAL_GPIO_PULL_DISABLED);
+
+    nrf_gpio_cfg_input(pin->number, NRF_GPIO_PIN_NOPULL);
+
     return DIGITALINOUT_OK;
 }
 
-bool common_hal_digitalio_digitalinout_deinited(digitalio_digitalinout_obj_t* self) {
-    return self->pin == mp_const_none;
+bool common_hal_digitalio_digitalinout_deinited(digitalio_digitalinout_obj_t *self) {
+    return self->pin == NULL;
 }
 
-void common_hal_digitalio_digitalinout_deinit(digitalio_digitalinout_obj_t* self) {
+void common_hal_digitalio_digitalinout_deinit(digitalio_digitalinout_obj_t *self) {
     if (common_hal_digitalio_digitalinout_deinited(self)) {
         return;
     }
-    reset_pin(self->pin->pin);
-    self->pin = mp_const_none;
+    nrf_gpio_cfg_default(self->pin->number);
+
+    reset_pin_number(self->pin->number);
+    self->pin = NULL;
 }
 
 void common_hal_digitalio_digitalinout_switch_to_input(
-        digitalio_digitalinout_obj_t* self, digitalio_pull_t pull) {
-    self->output = false;
-
-    hal_gpio_cfg_pin(self->pin->port, self->pin->pin, HAL_GPIO_MODE_INPUT, HAL_GPIO_PULL_DISABLED);
+        digitalio_digitalinout_obj_t *self, digitalio_pull_t pull) {
+    nrf_gpio_cfg_input(self->pin->number, NRF_GPIO_PIN_NOPULL);
     common_hal_digitalio_digitalinout_set_pull(self, pull);
 }
 
 void common_hal_digitalio_digitalinout_switch_to_output(
-        digitalio_digitalinout_obj_t* self, bool value,
+        digitalio_digitalinout_obj_t *self, bool value,
         digitalio_drive_mode_t drive_mode) {
-    const uint8_t pin = self->pin->pin;
 
-    self->output = true;
-    self->open_drain = (drive_mode == DRIVE_MODE_OPEN_DRAIN);
-
-    hal_gpio_cfg_pin(self->pin->port, pin, HAL_GPIO_MODE_OUTPUT, HAL_GPIO_PULL_DISABLED);
+    common_hal_digitalio_digitalinout_set_drive_mode(self, drive_mode);
     common_hal_digitalio_digitalinout_set_value(self, value);
 }
 
 digitalio_direction_t common_hal_digitalio_digitalinout_get_direction(
-        digitalio_digitalinout_obj_t* self) {
-    return self->output? DIRECTION_OUTPUT : DIRECTION_INPUT;
+        digitalio_digitalinout_obj_t *self) {
+
+    return (nrf_gpio_pin_dir_get(self->pin->number) == NRF_GPIO_PIN_DIR_INPUT)
+        ? DIRECTION_INPUT : DIRECTION_OUTPUT;
 }
 
 void common_hal_digitalio_digitalinout_set_value(
-        digitalio_digitalinout_obj_t* self, bool value) {
-    if (value) {
-        if (self->open_drain) {
-            hal_gpio_dir_set(self->pin->port, self->pin->pin, HAL_GPIO_MODE_INPUT);
-        } else {
-            hal_gpio_pin_set(self->pin->port, self->pin->pin);
-            hal_gpio_dir_set(self->pin->port, self->pin->pin, HAL_GPIO_MODE_OUTPUT);
-        }
-    } else {
-        hal_gpio_pin_clear(self->pin->port, self->pin->pin);
-        hal_gpio_dir_set(self->pin->port, self->pin->pin, HAL_GPIO_MODE_OUTPUT);
-    }
+        digitalio_digitalinout_obj_t *self, bool value) {
+    nrf_gpio_pin_write(self->pin->number, value);
 }
 
 bool common_hal_digitalio_digitalinout_get_value(
-        digitalio_digitalinout_obj_t* self) {
-    const uint8_t pin = self->pin->pin;
-    if (!self->output) {
-        return hal_gpio_pin_read(self->pin);
-    } else {
-        if (self->open_drain && hal_gpio_dir_get(self->pin->port, self->pin->pin) == HAL_GPIO_MODE_INPUT) {
-            return true;
-        } else {
-            return (GPIO_BASE(self->pin->port)->OUT >> pin) & 1;
-        }
-    }
+        digitalio_digitalinout_obj_t *self) {
+    return (nrf_gpio_pin_dir_get(self->pin->number) == NRF_GPIO_PIN_DIR_INPUT)
+        ? nrf_gpio_pin_read(self->pin->number)
+        : nrf_gpio_pin_out_read(self->pin->number);
 }
 
 void common_hal_digitalio_digitalinout_set_drive_mode(
-        digitalio_digitalinout_obj_t* self,
+        digitalio_digitalinout_obj_t *self,
         digitalio_drive_mode_t drive_mode) {
-    bool value = common_hal_digitalio_digitalinout_get_value(self);
-    self->open_drain = drive_mode == DRIVE_MODE_OPEN_DRAIN;
-    // True is implemented differently between modes so reset the value to make
-    // sure its correct for the new mode.
-    if (value) {
-        common_hal_digitalio_digitalinout_set_value(self, value);
-    }
+    nrf_gpio_cfg(self->pin->number,
+                 NRF_GPIO_PIN_DIR_OUTPUT,
+                 NRF_GPIO_PIN_INPUT_DISCONNECT,
+                 NRF_GPIO_PIN_NOPULL,
+                 drive_mode == DRIVE_MODE_OPEN_DRAIN ? NRF_GPIO_PIN_H0D1 : NRF_GPIO_PIN_H0H1,
+                 NRF_GPIO_PIN_NOSENSE);
 }
 
 digitalio_drive_mode_t common_hal_digitalio_digitalinout_get_drive_mode(
-        digitalio_digitalinout_obj_t* self) {
-    if (self->open_drain) {
+        digitalio_digitalinout_obj_t *self) {
+    uint32_t pin = self->pin->number;
+    // Changes pin to be a relative pin number in port.
+    NRF_GPIO_Type *reg = nrf_gpio_pin_port_decode(&pin);
+
+    switch ((reg->PIN_CNF[pin] & GPIO_PIN_CNF_DRIVE_Msk) >> GPIO_PIN_CNF_DRIVE_Pos) {
+    case NRF_GPIO_PIN_S0D1:
+    case NRF_GPIO_PIN_H0D1:
         return DRIVE_MODE_OPEN_DRAIN;
-    } else {
+    default:
         return DRIVE_MODE_PUSH_PULL;
     }
 }
 
 void common_hal_digitalio_digitalinout_set_pull(
-        digitalio_digitalinout_obj_t* self, digitalio_pull_t pull) {
-    hal_gpio_pull_t asf_pull = HAL_GPIO_PULL_DISABLED;
+        digitalio_digitalinout_obj_t *self, digitalio_pull_t pull) {
+    nrf_gpio_pin_pull_t hal_pull = NRF_GPIO_PIN_NOPULL;
+
     switch (pull) {
         case PULL_UP:
-            asf_pull = HAL_GPIO_PULL_UP;
+            hal_pull = NRF_GPIO_PIN_PULLUP;
             break;
         case PULL_DOWN:
-            asf_pull = HAL_GPIO_PULL_DOWN;
+            hal_pull = NRF_GPIO_PIN_PULLDOWN;
             break;
         case PULL_NONE:
         default:
             break;
     }
-    hal_gpio_pull_set(self->pin->port, self->pin->pin, asf_pull);
+
+    nrf_gpio_cfg_input(self->pin->number, hal_pull);
 }
 
 digitalio_pull_t common_hal_digitalio_digitalinout_get_pull(
-        digitalio_digitalinout_obj_t* self) {
-    uint32_t pin = self->pin->pin;
-    if (self->output) {
-        mp_raise_AttributeError("Cannot get pull while in output mode");
-        return PULL_NONE;
-    } else {
-        hal_gpio_pull_t pull = hal_gpio_pull_get(self->pin->port, pin);
+        digitalio_digitalinout_obj_t *self) {
+    uint32_t pin = self->pin->number;
+    // Changes pin to be a relative pin number in port.
+    NRF_GPIO_Type *reg = nrf_gpio_pin_port_decode(&pin);
 
-        switch(pull)
-        {
-          case HAL_GPIO_PULL_UP:
-          return PULL_UP;
+    if (nrf_gpio_pin_dir_get(self->pin->number) == NRF_GPIO_PIN_DIR_OUTPUT) {
+        mp_raise_AttributeError(translate("Cannot get pull while in output mode"));
+    }
 
-          case HAL_GPIO_PULL_DOWN:
-          return PULL_DOWN;
-
-          default: return PULL_NONE;
-        }
+    switch ((reg->PIN_CNF[pin] & GPIO_PIN_CNF_PULL_Msk) >> GPIO_PIN_CNF_PULL_Pos) {
+        case NRF_GPIO_PIN_PULLUP:
+            return PULL_UP;
+        case NRF_GPIO_PIN_PULLDOWN:
+            return PULL_DOWN;
+        default:
+            return PULL_NONE;
     }
 }
